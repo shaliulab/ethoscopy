@@ -1095,7 +1095,7 @@ class behavpy(pd.DataFrame):
             new[t_column] = new[t_column] + (new['tmp_col'] * (60*60*24))
             return new.drop(columns = ['tmp_col'])
 
-    def heatmap(self, variable = 'moving', t_column = 't', title = ''):
+    def heatmap(self, variable = 'moving', t_column = 't', title = '', bin_secs=1800, bin_size=5):
         """
         Creates an aligned heatmap of the movement data binned to 30 minute intervals using plotly
         
@@ -1109,14 +1109,13 @@ class behavpy(pd.DataFrame):
         if variable == 'moving':
             heatmap_df[variable] = np.where(heatmap_df[variable] == True, 1, 0)
 
-        heatmap_df = heatmap_df.bin_time(column = variable, bin_secs = 1800, t_column = t_column)
-        heatmap_df['t_bin'] = heatmap_df['t_bin'] / (60*60)
+        heatmap_df = heatmap_df.bin_time(column = variable, bin_secs = bin_secs, t_column = t_column)
+        heatmap_df['t_bin'] = heatmap_df['t_bin'] / 3600
         # create an array starting with the earliest half hour bin and the last with 0.5 intervals
         start = heatmap_df['t_bin'].min().astype(int)
         end = heatmap_df['t_bin'].max().astype(int)
-        time_list = np.array([x / 10 for x in range(start*10, end*10+5, 5)])
-        time_map = pd.Series(time_list, 
-                    name = 't_bin')
+        time_list = np.array([x / (3600 // bin_secs) for x in range(start*(3600 // bin_secs), end*(3600 // bin_secs)+bin_size, bin_size)])
+        time_map = pd.Series(time_list, name = 't_bin')
 
         def align_data(data):
             """merge the individual fly groups time with the time map, filling in missing points with NaN values"""
