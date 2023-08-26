@@ -461,6 +461,8 @@ class behavpy_HMM(behavpy):
         assert isinstance(wrapped, bool)
 
         df = self.copy(deep = True)
+        df.index = [e for e in df.index]
+        
 
         labels, colours = self._check_hmm_shape(hm = hmm, lab = labels, col = colours)
 
@@ -547,6 +549,12 @@ class behavpy_HMM(behavpy):
             else:
                 d = self.copy(deep = True)
 
+            d.index = [e for e in d.index]
+            if "id" not in d.columns:
+                d.reset_index(inplace=True)
+                d["id"]=d["index"]
+                d.set_index("index", inplace=True)
+                
             states_list, time_list = self._hmm_decode(d, h, b, variable, func)
 
             analysed_df = pd.DataFrame()
