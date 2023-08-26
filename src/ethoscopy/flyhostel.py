@@ -133,9 +133,11 @@ def read_single_roi(file,
             data = data.drop(columns = ['is_inferred'])
 
 
-        dist = np.sqrt(np.diff(data[["x", "y"]].values, axis=0).sum(axis=1))
+        min_distance = 1 / roi_row["w"].item()
+        dist = euclidean_distance_over_time(data[["x", "y"]].values) + min_distance
         xy_dist_log10x1000 = np.log10(dist) * 1000
-        xy_dist_log10x1000 = [0] + xy_dist_log10x1000.tolist()
+        xy_dist_log10x1000 = np.array([min_distance] + xy_dist_log10x1000.tolist())
+
         data["xy_dist_log10x1000"] = xy_dist_log10x1000
         data["phi"] = 0
         data["w"] = 0
@@ -153,3 +155,6 @@ def read_single_roi(file,
 
     finally:
         conn.close()
+
+def euclidean_distance_over_time(xy):
+    return np.sqrt((np.diff(xy, axis=0)**2).sum(axis=1))
