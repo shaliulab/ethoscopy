@@ -1131,6 +1131,8 @@ class behavpy(pd.DataFrame):
             return df                    
 
         heatmap_df = heatmap_df.groupby('id', group_keys = False).apply(align_data)
+        if "categories" in dir(self.index):
+            heatmap_df.index=pd.Categorical(heatmap_df.index, self.index.categories)
 
         gbm = heatmap_df.groupby(heatmap_df.index)[f'{variable}_mean'].apply(list)
         id = heatmap_df.groupby(heatmap_df.index)['t_bin'].mean().index.tolist()
@@ -1490,6 +1492,9 @@ class behavpy(pd.DataFrame):
         else:
             d_list = [self.copy(deep = True)]
             facet_labels = ['']
+
+        for data in d_list:
+            data.index = [e for e in data.index]
 
         col_list = self._get_colours(d_list)
 
