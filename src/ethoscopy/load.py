@@ -1,5 +1,6 @@
 import ftplib
-import os
+import traceback
+import os.path
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd 
@@ -14,11 +15,121 @@ from urllib.parse import urlparse
 
 from ethoscopy.misc.validate_datetime import validate_datetime
 from ethoscopy.misc.format_warning import format_warning
+from ethoscopy.ethoscope import read_single_roi as read_ethoscope_single_roi
+from ethoscopy.flyhostel import read_single_roi as read_flyhostel_single_roi
 
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
 
-def download_from_remote_dir(meta, remote_dir, local_dir):
+
+def ethoscope_database_rule(path):
+    return path.endswith(".db")
+
+def flyhostel_database_rule(path):
+    return os.path.basename(path).startswith("FlyHostel") and path.endswith(".db")
+
+def list_files(remote_dir, ethoscope_list, source="ethoscope"):
+
+    if source == "ethoscope":
+        rule = ethoscope_database_rule
+    elif source == "flyhostel":
+        rule = flyhostel_database_rule
+
+    wd = os.getcwd()
+
+    paths = []
+    check_list = []
+    try:
+        os.chdir(remote_dir)
+        database = os.listdir()
+        dirs = [path for path in database if os.path.isdir(path) or os.path.isdir(os.path.realpath(path))]
+        for dir in dirs:
+            try:
+                os.chdir(dir)
+                directories_2 = os.listdir()
+                for c, name in enumerate(ethoscope_list):
+                    if name in directories_2:
+                        os.chdir(name)
+                        directories_3 = os.listdir()
+                        for exp in directories_3:
+                            date_time = exp.split('_')
+                            print(os.getcwd(), exp)
+
+                            os.chdir(exp)
+                            directories_4 = os.listdir()
+                            for db in directories_4:
+                                if rule(db):
+                                    size = os.path.getsize(db)
+                                    final_path = f'{dir}/{name}/{exp}/{db}'
+                                    path_size_list = [final_path, size]
+                                    paths.append(path_size_list)
+                                    check_list.append([name, date_time[0]])
+                            os.chdir("..")
+                        os.chdir("..")
+                os.chdir("..")
+
+                                        
+            except Exception as error:
+                print(traceback.print_exc())
+                print(error)
+
+            finally:
+                os.chdir(remote_dir)
+                
+    finally:
+        os.chdir(wd)
+
+
+    return check_list, paths
+    
+
+def list_remote_files(remote_dir, ethoscope_list):
+    # connect to ftp server and parse the given ftp link
+    parse = urlparse(remote_dir)
+    ftp = ftplib.FTP(parse.netloc)
+    ftp.login()
+    ftp.cwd(parse.path)
+    files = ftp.nlst()
+
+    paths = []
+    check_list = []
+    # iterate through the first level of directories looking for ones that match the ethoscope names given, 
+    # find the susequent files that match the date and time and add to paths list
+    # this is slow, should change to walk directory once, get all information and then match to csv
+
+    for dir in files:
+        temp_path = parse.path / PurePosixPath(dir)
+        try:
+            ftp.cwd(str(temp_path))
+            directories_2 = ftp.nlst()
+            for c, name in enumerate(ethoscope_list):
+                if name in directories_2:
+                    ftp.cwd(name)
+                    directories_3 = ftp.nlst()
+                    for exp in directories_3:
+                        date_time = exp.split('_')
+
+                        ftp.cwd(exp)
+                        directories_4 = ftp.nlst()
+                        for db in directories_4:
+                            if db.endswith('.db'):
+                                size = ftp.size(db)
+                                final_path = f'{dir}/{name}/{exp}/{db}'
+                                path_size_list = [final_path, size]
+                                paths.append(path_size_list)
+                                check_list.append([name, date_time[0]])
+                                    
+        except Exception as error:
+            print(traceback.print_exc())
+            print(error)
+            
+        finally:
+            ftp.cwd("/")
+
+        return check_list, paths
+    
+
+def download_from_remote_dir(meta, remote_dir, local_dir, source):
     """ 
     This function is used to import data from the ethoscope node platform to your local directory for later use. The ethoscope files must be saved on a
     remote FTP server and saved as .db files, see the Ethoscope manual for how to setup a node correctly
@@ -74,59 +185,10 @@ def download_from_remote_dir(meta, remote_dir, local_dir):
         time_list = pd.Series(nan_list)
         bool_list = time_list.isna().tolist()
 
-    # connect to ftp server and parse the given ftp link
-    parse = urlparse(remote_dir)
-    ftp = ftplib.FTP(parse.netloc)
-    ftp.login()
-    ftp.cwd(parse.path)
-    files = ftp.nlst()
-
-    paths = []
-    check_list = []
-    # iterate through the first level of directories looking for ones that match the ethoscope names given, 
-    # find the susequent files that match the date and time and add to paths list
-    # this is slow, should change to walk directory once, get all information and then match to csv
-
-    for dir in files:
-        temp_path = parse.path / PurePosixPath(dir)
-        try:
-            ftp.cwd(str(temp_path))
-            directories_2 = ftp.nlst()
-            for c, name in enumerate(ethoscope_list):
-                if name in directories_2:
-                    temp_path_2 = temp_path / PurePosixPath(name)
-                    ftp.cwd(str(temp_path_2))
-                    directories_3 = ftp.nlst()
-                    for exp in directories_3:
-                        date_time = exp.split('_')
-                        if date_time[0] == date_list[c]:
-                            if bool_list[c] is False:
-                                if date_time[1] == time_list[c]:
-                                    temp_path_3 = temp_path_2 / PurePosixPath(exp)
-                                    ftp.cwd(str(temp_path_3))
-                                    directories_4 = ftp.nlst()
-                                    for db in directories_4:
-                                        if db.endswith('.db'):
-                                            size = ftp.size(db)
-                                            final_path = f'{dir}/{name}/{exp}/{db}'
-                                            path_size_list = [final_path, size]
-                                            paths.append(path_size_list)
-                                            check_list.append([name, date_time[0]])
-
-                            else:
-                                temp_path_3 = temp_path_2 / PurePosixPath(exp)
-                                ftp.cwd(str(temp_path_3))
-                                directories_4 = ftp.nlst()
-                                for db in directories_4:
-                                    if db.endswith('.db'):
-                                        size = ftp.size(db)
-                                        final_path = f'{dir}/{name}/{exp}/{db}'
-                                        path_size_list = [final_path, size]
-                                        paths.append(path_size_list)
-                                        check_list.append([name, date_time[0]])
-                                    
-        except:
-            continue
+    if remote_dir.startswith("ftp://"):
+        check_list, paths = list_remote_files(remote_dir, ethoscope_list)
+    else:
+        check_list, paths = list_files(remote_dir, ethoscope_list, source=source)
 
     if len(paths) == 0:
         warnings.warn("No Ethoscope data could be found, please check the metadata file")
@@ -215,7 +277,7 @@ def download_from_remote_dir(meta, remote_dir, local_dir):
             t = stop - start
             times.append(t)
 
-def link_meta_index(metadata, remote_dir, local_dir):
+def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
     """ A function to alter the provided metadata file with the path locations of downloaded .db files from the Ethscope experimental system. The function will check all unique machines against the orginal ftp server 
         for any errors. Errors will be ommitted from the returned metadata table without warning
 
@@ -251,6 +313,14 @@ def link_meta_index(metadata, remote_dir, local_dir):
     
     # check the date format is YYYY-MM-DD, without this format the df merge will return empty
     # will correct to YYYY-MM-DD in a select few cases
+
+    if source == "flyhostel":
+        number_of_animals=pd.DataFrame(meta_df.groupby(["flyhostel_number", "flyhostel_date"]).size()).reset_index()
+        number_of_animals.columns = number_of_animals.columns.tolist()[:2] + ["number_of_animals"]
+        meta_df=meta_df.merge(number_of_animals, how="inner", on=["flyhostel_number", "flyhostel_date"])
+        meta_df["machine_name"] = [f"{number_of_animals}X" for number_of_animals in meta_df["number_of_animals"]] 
+        meta_df["date"] = meta_df["flyhostel_date"]
+
     meta_df = validate_datetime(meta_df)
 
     meta_df_original = meta_df.copy()
@@ -273,55 +343,11 @@ def link_meta_index(metadata, remote_dir, local_dir):
         time_list = pd.Series(nan_list)
         bool_list = time_list.isna().tolist()
 
-    parse = urlparse(remote_dir)
-    ftp = ftplib.FTP(parse.netloc)
-    ftp.login()
-    ftp.cwd(parse.path)
-    files = ftp.nlst()
-
-    paths = []
-    check_list = []
-
-    for dir in files:
-        temp_path = parse.path / PurePosixPath(dir)
-        try:
-            ftp.cwd(str(temp_path))
-            directories_2 = ftp.nlst()
-            for c, name in enumerate(ethoscope_list):
-                if name in directories_2:
-                    temp_path_2 = temp_path / PurePosixPath(name)
-                    ftp.cwd(str(temp_path_2))
-                    directories_3 = ftp.nlst()
-                    for exp in directories_3:
-                        date_time = exp.split('_')
-                        if date_time[0] == date_list[c]:
-                            if bool_list[c] is False:
-                                if date_time[1] == time_list[c]:
-                                    temp_path_3 = temp_path_2 / PurePosixPath(exp)
-                                    ftp.cwd(str(temp_path_3))
-                                    directories_4 = ftp.nlst()
-                                    for db in directories_4:
-                                        if db.endswith('.db'):
-                                            size = ftp.size(db)
-                                            final_path = f'{dir}/{name}/{exp}/{db}'
-                                            path_size_list = [final_path, size]
-                                            paths.append(path_size_list)
-                                            check_list.append([name, date_time[0]])
-
-                            else:
-                                temp_path_3 = temp_path_2 / PurePosixPath(exp)
-                                ftp.cwd(str(temp_path_3))
-                                directories_4 = ftp.nlst()
-                                for db in directories_4:
-                                    if db.endswith('.db'):
-                                        size = ftp.size(db)
-                                        final_path = f'{dir}/{name}/{exp}/{db}'
-                                        path_size_list = [final_path, size]
-                                        paths.append(path_size_list)
-                                        check_list.append([name, date_time[0]])
-                                    
-        except:
-            continue
+    
+    if remote_dir.startswith("ftp://"):
+        check_list, paths = list_remote_files(remote_dir, ethoscope_list)
+    else:
+        check_list, paths = list_files(remote_dir, ethoscope_list, source=source)
 
     if len(paths) == 0:
         warnings.warn("No Ethoscope data could be found, please check the metatadata file")
@@ -373,7 +399,6 @@ def link_meta_index(metadata, remote_dir, local_dir):
 
     #join the db path name with the users directory 
     full_path_list = []
-    parse = urlparse(remote_dir)
 
     for j in path_list:
         win_path = Path(j)
@@ -387,7 +412,8 @@ def link_meta_index(metadata, remote_dir, local_dir):
     
     return merge_df
 
-def load_ethoscope(metadata, min_time = 0 , max_time = float('inf'), reference_hour = None, cache = None, FUN = None, verbose = True):
+
+def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour = None, cache = None, FUN = None, verbose = True, source="ethoscope"):
     """
     A wrapper function to iterate through the dataframe generated by link_meta_index() and load the corresponding database files 
     and analyse them according to the inputted fucntion.
@@ -413,6 +439,12 @@ def load_ethoscope(metadata, min_time = 0 , max_time = float('inf'), reference_h
         try:
             if verbose is True:
                 print('Loading ROI_{} from {}'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
+            
+            if source == "ethoscope":
+                read_single_roi = read_ethoscope_single_roi
+            elif source=="flyhostel":
+                read_single_roi = read_flyhostel_single_roi
+
             roi_1 = read_single_roi(file = metadata.iloc[i,:],
                                     min_time = min_time,
                                     max_time = max_time,
@@ -441,93 +473,8 @@ def load_ethoscope(metadata, min_time = 0 , max_time = float('inf'), reference_h
 
     return data
 
-def read_single_roi(file, min_time = 0, max_time = float('inf'), reference_hour = None, cache = None):
-    """
-    Loads the data from a single region from an ethoscope according to inputted times
-    changes time to reference hour and applies any functions added
-    
-    Params: 
-    @ file = row in a metadata pd.DataFrane containing a column 'path' with .db file Location
-    @ min_time = time constraint with which to query database (in hours), default is 0
-    @ max_time = same as above
-    @ reference_hour = the time in hours when the light begins in the experiment, i.e. the beginning of a 24 hour session
-    @ cache = if not None provide path for folder with saved caches or folder to be saved to
-    
-    returns a pandas dataframe containing raw ethoscope dataframe
-    """
+def load_ethoscope(*args, **kwargs):
+    return load_device(*args, **kwargs, source="ethoscope")
 
-    if min_time > max_time:
-        exit('Error: min_time is larger than max_time')
-
-    if cache is not None:
-        cache_name = 'cached_{}_{}_{}.pkl'.format(file['machine_id'], file['region_id'], file['date'])
-        path = Path(cache) / Path(cache_name)
-        if path.exists():
-            data = pd.read_pickle(path)
-            return data
-
-    try:
-        conn = sqlite3.connect(file['path'])
-
-        roi_df = pd.read_sql_query('SELECT * FROM ROI_MAP', conn)
-        
-        roi_row = roi_df[roi_df['roi_idx'] == file['region_id']]
-
-        if len(roi_row.index) < 1:
-            print('ROI {} does not exist, skipping'.format(file['region_id']))
-            return None
-
-        var_df = pd.read_sql_query('SELECT * FROM VAR_MAP', conn)
-        date = pd.read_sql_query('SELECT value FROM METADATA WHERE field = "date_time"', conn)
-
-        # isolate date_time string and parse to GMT with format YYYY-MM-DD HH-MM-SS
-        date = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(date.iloc[0])))      
-
-        if max_time == float('inf'):
-            max_time_condtion =  ''
-        else:
-            max_time_condtion = 'AND t < {}'.format(max_time * 1000) 
-        
-        min_time = min_time * 1000
-        #sql_query takes roughyl 2.8 seconds for 2.5 days of data
-        sql_query = 'SELECT * FROM ROI_{} WHERE t >= {} {}'.format(file['region_id'], min_time, max_time_condtion)
-        data = pd.read_sql_query(sql_query, conn)
-        
-        if 'id' in data.columns:
-            data = data.drop(columns = ['id'])
-
-        if reference_hour != None:
-            t = date
-            t = t.split(' ')
-            hh, mm , ss = map(int, t[1].split(':'))
-            hour_start = hh + mm/60 + ss/3600
-            t_after_ref = ((hour_start - reference_hour) % 24) * 3600 * 1e3
-            data.t = (data.t + t_after_ref) / 1e3
-        
-        else:
-            data.t = data.t / 1e3
-            
-        roi_width = max(roi_row['w'].iloc[0], roi_row['h'].iloc[0])
-        for var_n in var_df['var_name']:
-            if var_df['functional_type'][var_df['var_name'] == var_n].iloc[0] == 'distance':
-                data[var_n] = data[var_n] / roi_width
-
-        if 'is_inferred' and 'has_interacted' in data.columns:
-            data = data[(data['is_inferred'] == False) | (data['has_interacted'] == True)]
-            # check if has_interacted is all false / 0, drop if so
-            interacted_list = data['has_interacted'].to_numpy()
-            if (0 == interacted_list[:]).all() == True:
-                data = data.drop(columns = ['has_interacted'])
-                # data = data.drop(columns = ['is_inferred'])
-        
-        elif 'is_inferred' in data.columns:
-            data = data[data['is_inferred'] == False]
-            data = data.drop(columns = ['is_inferred'])
-
-        if cache is not None:
-            data.to_pickle(path)
-
-        return data
-
-    finally:
-        conn.close()
+def load_flyhostel(*args, **kwargs):
+    return load_device(*args, **kwargs, source="flyhostel")
