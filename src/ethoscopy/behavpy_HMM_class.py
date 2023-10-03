@@ -462,6 +462,11 @@ class behavpy_HMM(behavpy):
 
         df = self.copy(deep = True)
         df.index = [e for e in df.index]
+        if "id" not in df.columns:
+            df.reset_index(inplace=True)
+            df["id"] = df["index"]
+            df.set_index("index", inplace=True)
+
         
 
         labels, colours = self._check_hmm_shape(hm = hmm, lab = labels, col = colours)

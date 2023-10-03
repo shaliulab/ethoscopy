@@ -17,6 +17,7 @@ from ethoscopy.misc.validate_datetime import validate_datetime
 from ethoscopy.misc.format_warning import format_warning
 from ethoscopy.ethoscope import read_single_roi as read_ethoscope_single_roi
 from ethoscopy.flyhostel import read_single_roi as read_flyhostel_single_roi
+from ethoscopy.flyhostel import read_qc_single_path
 
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
@@ -29,11 +30,59 @@ def flyhostel_database_rule(path):
     return os.path.basename(path).startswith("FlyHostel") and path.endswith(".db")
 
 def list_files(remote_dir, ethoscope_list, source="ethoscope"):
-
     if source == "ethoscope":
-        rule = ethoscope_database_rule
+        return list_ethoscope_files(remote_dir, ethoscope_list=ethoscope_list)
     elif source == "flyhostel":
-        rule = flyhostel_database_rule
+        return list_flyhostel_files(remote_dir)
+
+def list_flyhostel_files(remote_dir):
+
+    wd = os.getcwd()
+
+    paths = []
+    check_list = []
+    try:
+        os.chdir(remote_dir)
+        database = os.listdir()
+        flyhostels = [path for path in database if os.path.isdir(path) or os.path.isdir(os.path.realpath(path))]
+        for flyhostel in flyhostels:
+            try:
+                os.chdir(flyhostel)
+                x_folders = os.listdir()
+                for x_folder in x_folders:
+                    if os.path.isdir(x_folder) and x_folder.endswith("X"):
+                        os.chdir(x_folder)
+                        exp_folders = os.listdir()
+                        for exp in exp_folders:
+                            date_time = exp.split('_')
+                            os.chdir(exp)
+                            files = os.listdir()
+                            for path in files:
+                                if flyhostel_database_rule(path):
+                                    size = os.path.getsize(path)
+                                    final_path = f'{flyhostel}/{x_folder}/{exp}/{path}'
+                                    path_size_list = [final_path, size]
+                                    paths.append(path_size_list)
+                                    check_list.append([flyhostel, date_time[0]])
+                            os.chdir("..")
+                        os.chdir("..")
+                os.chdir("..")
+
+                                        
+            except Exception as error:
+                print(traceback.print_exc())
+                print(error)
+
+            finally:
+                os.chdir(remote_dir)
+                
+    finally:
+        os.chdir(wd)
+
+
+    return check_list, paths
+
+def list_ethoscope_files(remote_dir, ethoscope_list):
 
     wd = os.getcwd()
 
@@ -53,12 +102,10 @@ def list_files(remote_dir, ethoscope_list, source="ethoscope"):
                         directories_3 = os.listdir()
                         for exp in directories_3:
                             date_time = exp.split('_')
-                            print(os.getcwd(), exp)
-
                             os.chdir(exp)
                             directories_4 = os.listdir()
                             for db in directories_4:
-                                if rule(db):
+                                if ethoscope_database_rule(db):
                                     size = os.path.getsize(db)
                                     final_path = f'{dir}/{name}/{exp}/{db}'
                                     path_size_list = [final_path, size]
@@ -313,14 +360,6 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
     
     # check the date format is YYYY-MM-DD, without this format the df merge will return empty
     # will correct to YYYY-MM-DD in a select few cases
-
-    if source == "flyhostel":
-        number_of_animals=pd.DataFrame(meta_df.groupby(["flyhostel_number", "flyhostel_date"]).size()).reset_index()
-        number_of_animals.columns = number_of_animals.columns.tolist()[:2] + ["number_of_animals"]
-        meta_df=meta_df.merge(number_of_animals, how="inner", on=["flyhostel_number", "flyhostel_date"])
-        meta_df["machine_name"] = [f"{number_of_animals}X" for number_of_animals in meta_df["number_of_animals"]] 
-        meta_df["date"] = meta_df["flyhostel_date"]
-
     meta_df = validate_datetime(meta_df)
 
     meta_df_original = meta_df.copy()
@@ -347,7 +386,7 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
     if remote_dir.startswith("ftp://"):
         check_list, paths = list_remote_files(remote_dir, ethoscope_list)
     else:
-        check_list, paths = list_files(remote_dir, ethoscope_list, source=source)
+        check_list, paths = list_files(remote_dir, list(set(ethoscope_list)), source=source)
 
     if len(paths) == 0:
         warnings.warn("No Ethoscope data could be found, please check the metatadata file")
@@ -360,31 +399,37 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
             print(f'{i[0]}_{i[1]} has not been found')
 
     # split path into parts
-    split_df = pd.DataFrame()
+    database_df = pd.DataFrame()
+
+
     for path in paths:  
         split_path = path[0].split('/')
         split_series = pd.DataFrame(data = split_path).T 
         split_series.columns = ['machine_id', 'machine_name', 'date_time', 'file_name']
         split_series['file_size'] = path[1]
-        split_df = pd.concat([split_df, split_series], ignore_index = True)
+        database_df = pd.concat([database_df, split_series], ignore_index = True)
 
     #split the date_time column and add back to df
-    split_df[['date', 'time']] = split_df.date_time.str.split('_', expand = True)
-    split_df.drop(columns = ["date_time"], inplace = True)
+    database_df[['date', 'time']] = database_df.date_time.str.split('_', expand = True)
+    database_df.drop(columns = ["date_time"], inplace = True)
 
     #merge df's
     if 'time' in meta_df_original.columns.tolist():
-        merge_df = meta_df_original.merge(split_df, how = 'outer', on = ['machine_name', 'date', 'time'])
+        merge_df = meta_df_original.merge(database_df, how = 'outer', on = ['machine_name', 'date', 'time'])
         merge_df.dropna(inplace = True)
     
     else:
-        drop_df = split_df.sort_values(['file_size'], ascending = False)
-        drop_df = drop_df.drop_duplicates(['machine_name', 'date'])
-        droplog = split_df[split_df.duplicated(subset=['machine_name', 'date'])]
-        drop_list = droplog['machine_name'].tolist()
-        if len(drop_list) > 0:
-            warnings.warn(f'Ethoscopes {*drop_list,} have multiple files for their day, the largest file has been kept. If you want all files for that day please add a time column')
-        merge_df = meta_df_original.merge(drop_df, how = 'outer', on = ['machine_name', 'date'])
+        drop_df = database_df.sort_values(['file_size'], ascending = False)
+        drop_df = drop_df.drop_duplicates(['machine_id', 'machine_name', 'date'])
+        if source == "ethoscope":
+            droplog = database_df[database_df.duplicated(subset=['machine_id', 'machine_name', 'date'])]
+            drop_list = droplog['machine_name'].tolist()
+            if len(drop_list) > 0:
+                warnings.warn(f'Ethoscopes {*drop_list,} have multiple files for their day, the largest file has been kept. If you want all files for that day please add a time column')
+            merge_df = meta_df_original.merge(drop_df, how = 'outer', on = ['machine_name', 'date'])
+        elif source == "flyhostel":
+            merge_df = meta_df_original.merge(drop_df, how = 'outer', on = ['machine_id', 'machine_name', 'date'])
+
         merge_df.dropna(inplace = True)
 
     # convert df to list and cross-reference to 'index' csv/txt to find stored paths
@@ -392,10 +437,12 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
     
     # intialise path_list and populate with paths from previous
     path_list = []
-    for path in path_name:
-        for i in paths:
-            if path in i[0]:
-                path_list.append(i[0])
+    database = paths
+
+    for i, path in enumerate(path_name):
+        for j, (entry, _) in enumerate(database):
+            if path in entry:
+                path_list.append(entry)
 
     #join the db path name with the users directory 
     full_path_list = []
@@ -412,7 +459,24 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
     
     return merge_df
 
+def load_qc(metadata, reference_hour=None):
+    paths_ref_hours = set([tuple(e[1].tolist()) for e in list(metadata[["path", "reference_hour"]].iterrows())])
+    
+    qcs=[]
+    for path, reference_hour_ in paths_ref_hours:
+        if reference_hour_ is None:
+            if reference_hour is not None:
+                reference_hour_ = reference_hour
+                qcs.append(read_qc_single_path(path, reference_hour=reference_hour_))
+            else:
+                pass
+        else:
+            qcs.append(read_qc_single_path(path, reference_hour=reference_hour_))
 
+    qcs = pd.concat(qcs)
+    return qcs
+
+    
 def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour = None, cache = None, FUN = None, verbose = True, source="ethoscope"):
     """
     A wrapper function to iterate through the dataframe generated by link_meta_index() and load the corresponding database files 
@@ -438,19 +502,25 @@ def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour
     for i in range(len(metadata.index)):
         try:
             if verbose is True:
-                print('Loading ROI_{} from {}'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
+                print(
+                    'Loading ROI_{} from {}'.format(
+                        metadata['region_id'].iloc[i],
+                        f"{metadata['machine_id'].iloc[i][:10]}/{metadata['machine_name'].iloc[i]}/{metadata['date'].iloc[i]}"
+                    )
+                )
             
             if source == "ethoscope":
                 read_single_roi = read_ethoscope_single_roi
             elif source=="flyhostel":
                 read_single_roi = read_flyhostel_single_roi
 
-            roi_1 = read_single_roi(file = metadata.iloc[i,:],
-                                    min_time = min_time,
-                                    max_time = max_time,
-                                    reference_hour = reference_hour,
-                                    cache = cache
-                                    )
+            roi_1 = read_single_roi(
+                file = metadata.iloc[i,:],
+                min_time = min_time,
+                max_time = max_time,
+                reference_hour = reference_hour,
+                cache = cache
+            )
 
             if roi_1 is None:
                 if verbose is True:

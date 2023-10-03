@@ -1,4 +1,5 @@
 import traceback
+import os.path
 import logging
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -14,7 +15,38 @@ from ethoscopy.misc.format_warning import format_warning
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
 
+def read_qc_single_path(path, reference_hour):
+    with sqlite3.connect(path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM QC;")
+        records = cursor.fetchall()
+        qc=pd.DataFrame.from_records(records)
+        cursor.execute("PRAGMA table_info(QC);")
+        meta = cursor.fetchall()
+        columns = [e[1] for e in meta]
+        qc.columns = columns
+        
+        chunk_starts=[]
+        key=os.path.splitext(os.path.basename(path))[0]
+        t0 = key.split("_")[3]
 
+        h, m, s = t0.split("-")
+        t0 = int(h)*3600 + int(m)*60 + int(s) # in seconds
+        
+        for chunk in qc["chunk"]:
+            cursor.execute(f"SELECT frame_time FROM STORE_INDEX WHERE chunk = {chunk} LIMIT 1;")
+            chunk_t0 = cursor.fetchone()
+            if chunk_t0 is not None:
+                chunk_t0=chunk_t0[0] / 1000
+                t = round(chunk_t0 + t0 - reference_hour*3600)
+                chunk_starts.append((chunk, t))
+                
+    chunk_starts=pd.DataFrame.from_records(chunk_starts, columns=["chunk", "t"])
+    qc = pd.merge(qc, chunk_starts, left_on="chunk", right_on="chunk")
+    qc["path"] = path
+    return qc    
+
+        
 def read_single_roi(file,
                     min_time = 0,
                     max_time = float('inf'),
@@ -32,6 +64,7 @@ def read_single_roi(file,
         if path.exists():
             data = pd.read_pickle(path)
             return data
+    conn = None
 
     try:
         conn = sqlite3.connect(file['path'])
@@ -154,7 +187,8 @@ def read_single_roi(file,
         print(error)
 
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 def euclidean_distance_over_time(xy):
     return np.sqrt((np.diff(xy, axis=0)**2).sum(axis=1))
