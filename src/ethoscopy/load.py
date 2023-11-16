@@ -7,17 +7,16 @@ import pandas as pd
 import numpy as np
 import errno
 import time 
-import sqlite3
 from sys import exit
 from pathlib import Path, PurePosixPath
 from functools import partial
 from urllib.parse import urlparse
-
+import joblib
 from ethoscopy.misc.validate_datetime import validate_datetime
 from ethoscopy.misc.format_warning import format_warning
 from ethoscopy.ethoscope import read_single_roi as read_ethoscope_single_roi
 from ethoscopy.flyhostel import read_single_roi as read_flyhostel_single_roi
-from ethoscopy.flyhostel import read_qc_single_path
+from ethoscopy.flyhostel import read_qc_single_path, load_hour_start
 
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
@@ -54,6 +53,13 @@ def list_flyhostel_files(remote_dir):
                         os.chdir(x_folder)
                         exp_folders = os.listdir()
                         for exp in exp_folders:
+                            # check that the found path is a folder
+                            # in case there are undesired files here
+                            # so that the pipeline does not error
+                            # (just warn the user) 
+                            if not os.path.isdir(exp):
+                                print(f"{os.getcwd()}/{exp} is not a directory. Please remove it")
+                                continue
                             date_time = exp.split('_')
                             os.chdir(exp)
                             files = os.listdir()
@@ -71,6 +77,7 @@ def list_flyhostel_files(remote_dir):
                                         
             except Exception as error:
                 print(traceback.print_exc())
+                print(f"WD: {os.getcwd()}")
                 print(error)
 
             finally:
@@ -316,7 +323,7 @@ def download_from_remote_dir(meta, remote_dir, local_dir, source):
 
         else:
             av_time = round((np.mean(times)/60) * (len(paths)-(counter+1)))
-            print(f'Estimated finish time: {av_time} mins') 
+            print(f'Estimated finish time: {av_time} mins')
             start = time.time()
             p = PurePosixPath(j[0])
             download(work_dir = p.parents[0], file_name = p.name, file_size = j[1])
@@ -335,13 +342,14 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
 
         returns a pandas dataframe containing the csv file information and corresponding path for each entry in the csv 
     """
+    print(metadata)
     metadata = Path(metadata)
     local_dir = Path(local_dir)
     #load metadata csv file
     #check csv path is real and read to pandas df
     if metadata.exists():
         try:
-            meta_df = pd.read_csv(metadata) 
+            meta_df = pd.read_csv(metadata)
         except Exception as e:
             print("An error occurred: ", e)
     else:
@@ -371,7 +379,11 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
         meta_df['check'] = meta_df['machine_name'] + meta_df['date'] 
         meta_df.drop_duplicates(subset = ['check'], keep = 'first', inplace = True, ignore_index = False)
 
-    ethoscope_list = meta_df['machine_name'].tolist()
+    if "machine_id" in meta_df.columns:
+        ethoscope_list = meta_df['machine_id'].tolist()
+    else:
+        ethoscope_list = meta_df['machine_name'].tolist()
+
     date_list = meta_df['date'].tolist()
 
     if 'time' in meta_df.columns.tolist():
@@ -392,11 +404,16 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
         warnings.warn("No Ethoscope data could be found, please check the metatadata file")
         exit()
     
-    for i in zip(ethoscope_list, date_list):
+    for k, i in enumerate(zip(ethoscope_list, date_list)):
         if list(i) in check_list:
             continue
         else:
-            print(f'{i[0]}_{i[1]} has not been found')
+            if "machine_id" in meta_df.columns:
+                msg = meta_df.iloc[k]["machine_id"] + "/" + meta_df.iloc[k]["machine_name"] + "/" + i[1] + " has not been found"
+            else:
+                msg = f'{i[0]}/{i[1]} has not been found'
+
+            print(msg)
 
     # split path into parts
     database_df = pd.DataFrame()
@@ -444,7 +461,7 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
             if path in entry:
                 path_list.append(entry)
 
-    #join the db path name with the users directory 
+    #join the db path name with the users directory
     full_path_list = []
 
     for j in path_list:
@@ -476,70 +493,101 @@ def load_qc(metadata, reference_hour=None):
     qcs = pd.concat(qcs)
     return qcs
 
+
+
+def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, verbose=True, source="ethoscope", time_system="recording"):
+    try:
+        if verbose is True:
+            if metadata["machine_name"].iloc[i] == "1X":
+                region_id=0
+            else:
+                region_id=metadata['region_id'].iloc[i]
     
-def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour = None, cache = None, FUN = None, verbose = True, source="ethoscope"):
+            print(
+                'Loading ROI_{} from {}'.format(
+                    region_id,
+                    f"{metadata['machine_id'].iloc[i][:10]}/{metadata['machine_name'].iloc[i]}/{metadata['date'].iloc[i]}"
+                )
+            )
+
+        
+        if source == "ethoscope":
+            read_single_roi = read_ethoscope_single_roi
+        elif source=="flyhostel":
+            read_single_roi = read_flyhostel_single_roi
+
+
+        meta = metadata.iloc[i,:]
+        if np.isnan(reference_hour):
+            reference_hour = meta["reference_hour"]
+
+        data = read_single_roi(
+            meta = meta,
+            min_time = min_time,
+            max_time = max_time,
+            reference_hour = reference_hour,
+            cache = cache,
+            time_system=time_system,
+        )
+
+        if data is None:
+            if verbose is True:
+                print('ROI_{} from {} was unable to load due to an error formatting roi'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
+            return
+
+        if FUN is not None:
+            data = FUN(data)
+
+            
+
+        if data is None:
+            if verbose is True:
+                print('ROI_{} from {} was unable to load due to an error in applying the function'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
+            return
+        data.insert(0, 'id', metadata['id'].iloc[i])
+        return data
+    
+    except:
+        if verbose is True:
+            print('ROI_{} from {} was unable to load due to an error loading roi'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
+        return
+
+    
+def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour = None, cache = None, FUN = None, verbose = True, source="ethoscope", time_system="recording", n_jobs=1):
     """
     A wrapper function to iterate through the dataframe generated by link_meta_index() and load the corresponding database files 
     and analyse them according to the inputted fucntion.
 
     Params:
     metadata = pd.DataFrame object, metadata df as returned from link_meta_index function
-    min_time = int, the minimum time you want to load data from with 0 being the experiment start (in hours), for all experiments
+    min_time = int, the minimum time you want to load data from with 0 being the experiment start (in seconds), for all experiments
     max_time = int, same as above
     reference_hour = int, the hour at which lights on occurs when the experiment is begun. None equals the start of the experiment
     cache = string, the local path to find and store cached versions of each ROI per database. Cached files are in a pickle format
     FUN = function, a function to apply indiviual curatation to each ROI, if None the data remains as found in the database
 
     returns a pandas DataFrame object containing the database data and unique ids per fly as the index
-    """  
-
-    max_time = max_time * 60 * 60
-    min_time = min_time * 60 * 60
+    """
 
     data = pd.DataFrame()
 
+    # for i in range(len(metadata.index)):           
+    #     data=load_data(i, metadata, min_time, max_time, reference_hour=reference_hour, cache=cache, FUN=FUN, verbose=verbose, source=source)
+    #     data = pd.concat([data, data], ignore_index= True)
+
     # iterate over the ROI of each ethoscope in the metadata df
-    for i in range(len(metadata.index)):
-        try:
-            if verbose is True:
-                print(
-                    'Loading ROI_{} from {}'.format(
-                        metadata['region_id'].iloc[i],
-                        f"{metadata['machine_id'].iloc[i][:10]}/{metadata['machine_name'].iloc[i]}/{metadata['date'].iloc[i]}"
-                    )
-                )
-            
-            if source == "ethoscope":
-                read_single_roi = read_ethoscope_single_roi
-            elif source=="flyhostel":
-                read_single_roi = read_flyhostel_single_roi
+    Output = joblib.Parallel(n_jobs=n_jobs)(
+        joblib.delayed(
+            load_data
+        )(
+            i, metadata, min_time, max_time, reference_hour=reference_hour, cache=cache, FUN=FUN, verbose=verbose, source=source, time_system=time_system
+        )
+        for i in range(len(metadata.index))
+    )
 
-            roi_1 = read_single_roi(
-                file = metadata.iloc[i,:],
-                min_time = min_time,
-                max_time = max_time,
-                reference_hour = reference_hour,
-                cache = cache
-            )
-
-            if roi_1 is None:
-                if verbose is True:
-                    print('ROI_{} from {} was unable to load due to an error formatting roi'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
-                continue
-
-            if FUN is not None:
-                roi_1 = FUN(roi_1) 
-
-            if roi_1 is None:
-                if verbose is True:
-                    print('ROI_{} from {} was unable to load due to an error in applying the function'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
-                continue
-            roi_1.insert(0, 'id', metadata['id'].iloc[i])
-            data = pd.concat([data, roi_1], ignore_index= True)
-        except:
-            if verbose is True:
-                print('ROI_{} from {} was unable to load due to an error loading roi'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
-            continue
+    for d in Output:
+        if d is not None:
+            data = pd.concat([data, d], ignore_index= True)
 
     return data
 
