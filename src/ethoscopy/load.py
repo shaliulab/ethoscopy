@@ -1,4 +1,5 @@
 import ftplib
+import glob
 import traceback
 import os.path
 import warnings
@@ -11,6 +12,9 @@ from sys import exit
 from pathlib import Path, PurePosixPath
 from functools import partial
 from urllib.parse import urlparse
+import itertools
+import glob
+
 import joblib
 from ethoscopy.misc.validate_datetime import validate_datetime
 from ethoscopy.misc.format_warning import format_warning
@@ -20,6 +24,37 @@ from ethoscopy.flyhostel import read_qc_single_path, load_hour_start
 
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
+
+def update_metadata(meta_loc, prefix="ethoscope&flyhostel_metadata3"):
+    """
+    Puts together a single metadata.csv with all flies available in /flyhostel_metadata/ with the passed prefix
+    """
+    metadatas=glob.glob("/flyhostel_data/metadata/*")
+    metadatas=[path for path in metadatas if os.path.basename(path).startswith(prefix)]
+    metadatas=[pd.read_csv(path) for path in metadatas]
+    columns, counts = np.unique(list(itertools.chain(*[metadata.columns for metadata in metadatas])), return_counts=True)
+    missing_columns=columns[counts!=len(metadatas)]
+    all_columns=sorted(list(set(columns)))
+    metadatas2=[]
+    for metadata in metadatas:
+        for column in columns:
+            if not column in metadata.columns:
+                metadata[column]="NONE"
+        
+        metadatas2.append(metadata[all_columns])
+    metadata=pd.concat(metadatas2, axis=0)
+    metadata=metadata.loc[metadata["flyhostel_date"]!="NONE"]
+
+    x=metadata.groupby(["flyhostel_number", "flyhostel_date"]).size().reset_index()
+    x.columns=x.columns[:2].tolist() + ["number_of_animals"]
+    meta=metadata.merge(x, on=["flyhostel_number", "flyhostel_date"])
+    meta["machine_id"] = [f"FlyHostel{flyhostel_number}" for flyhostel_number in metadata["flyhostel_number"]]
+    meta["machine_name"] = [f"{e}X" for e in meta["number_of_animals"]]
+    meta["date"] = meta["flyhostel_date"]
+    meta["fly_no"] = [f"{machine_id}_{machine_name}_{region_id}" for machine_id, machine_name, region_id in zip(meta["machine_id"], meta["machine_name"],meta["region_id"])]
+    meta.drop(["flyhostel_date", "number_of_animals", "flyhostel_number"], axis=1, inplace=True)
+    meta.to_csv(meta_loc, index=None)
+
 
 
 def ethoscope_database_rule(path):
@@ -342,7 +377,6 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
 
         returns a pandas dataframe containing the csv file information and corresponding path for each entry in the csv 
     """
-    print(metadata)
     metadata = Path(metadata)
     local_dir = Path(local_dir)
     #load metadata csv file
@@ -471,6 +505,14 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
     
     #create a unique id for each row, consists of first 25 char of file_name and region_id, inserted at index 0
     merge_df.insert(0, 'path', full_path_list)
+    
+    if source == "flyhostel":
+        for i, (_, row) in enumerate(merge_df.iterrows()):
+            if row["identity"] != "NONE":
+                print(merge_df[["machine_id", "machine_name", "identity"]].iloc[i])
+                merge_df["region_id"].iloc[i]=row["identity"]
+
+        
     merge_df['region_id'] = merge_df['region_id'].astype(int)
     merge_df.insert(0, 'id', merge_df['file_name'].str.slice(0,26,1) + '|' + merge_df['region_id'].map('{:02d}'.format))
     

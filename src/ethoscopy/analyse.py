@@ -9,12 +9,13 @@ from math import floor
 from sys import exit
 from scipy.stats import zscore
 from ethoscopy.misc.rle import rle
+from ethoscopy.misc.xy_dist_log10x1000 import compute_xy_dist_log10x1000
 
 def max_velocity_detector(data, 
                         time_window_length,
                         velocity_correction_coef = 3e-3,
                         masking_duration = 6,
-                        optional_columns = 'has_interacted'
+                        optional_columns = ['has_interacted']
                         ):
     """ 
     Max_velocity_detector is the default movement classification for real-time ethoscope experiments.
@@ -36,14 +37,16 @@ def max_velocity_detector(data,
         return None
 
     needed_columns = ['t', 'x', 'y', 'w', 'h', 'phi', 'xy_dist_log10x1000']
+    data['dist'] = 10 ** (data.xy_dist_log10x1000 / 1000)
 
     dt = prep_data_motion_detector(data,
                                 needed_columns = needed_columns,
                                 time_window_length = time_window_length,
                                 optional_columns = optional_columns)
 
-    dt['deltaT'] = dt.t.diff()
+
     dt['dist'] = 10 ** (dt.xy_dist_log10x1000 / 1000)
+    dt['deltaT'] = dt.t.diff()
     dt['velocity'] = dt.dist / velocity_correction_coef
 
     dt['beam_cross'] = abs(np.sign(0.5 - dt['x']).diff())
@@ -59,17 +62,22 @@ def max_velocity_detector(data,
     dt['beam_cross'] = dt['beam_cross'] & ~dt['mask']
     dt = dt.drop(columns = ['interaction_id', 'mask'])
 
+    extra={}
+    if "frame_number" in optional_columns:
+        extra["frame_number"]=pd.NamedAgg(column="frame_number", aggfunc="min")
+
     d_small = dt.groupby('t_round').agg(
-    x = pd.NamedAgg(column='x', aggfunc='mean'),
-    y = pd.NamedAgg(column='y', aggfunc='mean'),
-    w = pd.NamedAgg(column='w', aggfunc='mean'),
-    h = pd.NamedAgg(column='h', aggfunc='mean'),
-    phi = pd.NamedAgg(column='phi', aggfunc='mean'),
-    max_velocity = pd.NamedAgg(column='velocity', aggfunc='max'),
-    mean_velocity = pd.NamedAgg(column='velocity', aggfunc='mean'),
-    distance = pd.NamedAgg(column='dist', aggfunc='sum'),
-    interactions = pd.NamedAgg(column='has_interacted', aggfunc='sum'),
-    beam_crosses = pd.NamedAgg(column='beam_cross', aggfunc= 'sum')
+        x = pd.NamedAgg(column='x', aggfunc='mean'),
+        y = pd.NamedAgg(column='y', aggfunc='mean'),
+        w = pd.NamedAgg(column='w', aggfunc='mean'),
+        h = pd.NamedAgg(column='h', aggfunc='mean'),
+        phi = pd.NamedAgg(column='phi', aggfunc='mean'),
+        max_velocity = pd.NamedAgg(column='velocity', aggfunc='max'),
+        mean_velocity = pd.NamedAgg(column='velocity', aggfunc='mean'),
+        distance = pd.NamedAgg(column='dist', aggfunc='sum'),
+        interactions = pd.NamedAgg(column='has_interacted', aggfunc='sum'),
+        beam_crosses = pd.NamedAgg(column='beam_cross', aggfunc= 'sum'),
+        **extra
     )
 
     d_small['moving'] = np.where(d_small['max_velocity'] > 1, True, False)
@@ -83,7 +91,7 @@ def max_velocity_detector(data,
 def prep_data_motion_detector(data,
                             needed_columns,
                             time_window_length = 10,
-                            optional_columns = None 
+                            optional_columns = ["has_interacted"]
                             ):
     """ 
     This function bins all points of the time series column into a specified window.
@@ -140,12 +148,32 @@ def prep_data_motion_detector(data,
 
     return dc
 
-def sleep_annotation(data, 
+def downsample_to_fps(data, fps):
+    framerate=150
+    step=framerate//fps
+    data=data.loc[data["frame_number"] % step == 0]
+    data.sort_values("t", inplace=True)
+    data["xy_dist_log10x1000"] = compute_xy_dist_log10x1000(data, min_distance=1/1000)
+    data=data.iloc[1:]
+    return data
+
+
+def flyhostel_sleep_annotation(data, *args, **kwargs):
+    chunksize=45000
+    framerate=150
+    data=downsample_to_fps(data, fps=2)
+    data=data.loc[data["frame_number"] % chunksize != 0]
+    data=data.loc[data["frame_number"] % chunksize != framerate//2]
+    return sleep_annotation(data, *args, **kwargs)
+
+
+def sleep_annotation(data,
                     time_window_length = 10,
                     min_time_immobile = 300,
                     motion_detector_FUN = max_velocity_detector,
                     masking_duration = 6,
                     velocity_correction_coef = 3e-3,
+                    optional_columns=["has_interacted"]
                     ):
     """ 
     This function first uses a motion classifier to decide whether an animal is moving during a given time window.
@@ -162,14 +190,16 @@ def sleep_annotation(data,
     returns a pandas dataframe containing columns 'moving' and 'asleep'
     """
 
+
     if len(data.index) < 100:
+        print("Data is too sparse (< 100 rows)")
         return None
     
-    d_small = motion_detector_FUN(data, time_window_length, masking_duration = masking_duration, velocity_correction_coef = velocity_correction_coef)
+    d_small = motion_detector_FUN(data, time_window_length, masking_duration = masking_duration, velocity_correction_coef = velocity_correction_coef, optional_columns=optional_columns)
 
     if len(d_small.index) < 100:
+        print(f"Less than 100 time windows ({len(d_small.index)})")
         return None
-
     time_map = pd.Series(range(d_small.t.iloc[0], 
                         d_small.t.iloc[-1] + time_window_length, 
                         time_window_length
