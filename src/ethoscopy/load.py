@@ -30,25 +30,27 @@ def update_metadata(meta_loc, prefix="ethoscope&flyhostel_metadata3"):
     Puts together a single metadata.csv with all flies available in /flyhostel_metadata/ with the passed prefix
     """
     metadatas=glob.glob("/flyhostel_data/metadata/*")
-    metadatas=[path for path in metadatas if os.path.basename(path).startswith(prefix)]
-    metadatas=[pd.read_csv(path) for path in metadatas]
+    paths=[path for path in metadatas if os.path.basename(path).startswith(prefix)]
+    metadatas=[pd.read_csv(path) for path in paths]
     columns, counts = np.unique(list(itertools.chain(*[metadata.columns for metadata in metadatas])), return_counts=True)
     missing_columns=columns[counts!=len(metadatas)]
     all_columns=sorted(list(set(columns)))
     metadatas2=[]
-    for metadata in metadatas:
+    for i, metadata in enumerate(metadatas):
         for column in columns:
             if not column in metadata.columns:
                 metadata[column]="NONE"
-        
-        metadatas2.append(metadata[all_columns])
+
+        metadata["input_metadata"]=paths[i]
+        metadatas2.append(metadata[all_columns + ["input_metadata"]])
     metadata=pd.concat(metadatas2, axis=0)
     metadata=metadata.loc[metadata["flyhostel_date"]!="NONE"]
 
-    x=metadata.groupby(["flyhostel_number", "flyhostel_date"]).size().reset_index()
-    x.columns=x.columns[:2].tolist() + ["number_of_animals"]
-    meta=metadata.merge(x, on=["flyhostel_number", "flyhostel_date"])
-    meta["machine_id"] = [f"FlyHostel{flyhostel_number}" for flyhostel_number in metadata["flyhostel_number"]]
+    meta=metadata
+    # x=metadata.groupby(["flyhostel_number", "flyhostel_date"]).size().reset_index()
+    # x.columns=x.columns[:2].tolist() + ["number_of_animals"]
+    # meta=metadata.merge(x, on=["flyhostel_number", "flyhostel_date"])
+    meta["machine_id"] = [f"FlyHostel{flyhostel_number}" for flyhostel_number in meta["flyhostel_number"]]
     meta["machine_name"] = [f"{e}X" for e in meta["number_of_animals"]]
     meta["date"] = meta["flyhostel_date"]
     meta["fly_no"] = [f"{machine_id}_{machine_name}_{region_id}" for machine_id, machine_name, region_id in zip(meta["machine_id"], meta["machine_name"],meta["region_id"])]
@@ -366,7 +368,7 @@ def download_from_remote_dir(meta, remote_dir, local_dir, source):
             t = stop - start
             times.append(t)
 
-def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
+def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose=False):
     """ A function to alter the provided metadata file with the path locations of downloaded .db files from the Ethscope experimental system. The function will check all unique machines against the orginal ftp server 
         for any errors. Errors will be ommitted from the returned metadata table without warning
 
@@ -447,7 +449,8 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
             else:
                 msg = f'{i[0]}/{i[1]} has not been found'
 
-            print(msg)
+            if verbose:
+                print(msg)
 
     # split path into parts
     database_df = pd.DataFrame()
@@ -509,13 +512,16 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope"):
     if source == "flyhostel":
         for i, (_, row) in enumerate(merge_df.iterrows()):
             if row["identity"] != "NONE":
-                print(merge_df[["machine_id", "machine_name", "identity"]].iloc[i])
+                # print(merge_df[["machine_id", "machine_name", "identity"]].iloc[i])
                 merge_df["region_id"].iloc[i]=row["identity"]
 
         
     merge_df['region_id'] = merge_df['region_id'].astype(int)
     merge_df.insert(0, 'id', merge_df['file_name'].str.slice(0,26,1) + '|' + merge_df['region_id'].map('{:02d}'.format))
-    
+    for i, id in enumerate(merge_df["id"]):
+        if "1X" in id:
+            merge_df["id"].iloc[i] = id.split("|")[0] + "|00"
+
     return merge_df
 
 def load_qc(metadata, reference_hour=None):
@@ -537,7 +543,9 @@ def load_qc(metadata, reference_hour=None):
 
 
 
-def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, verbose=True, source="ethoscope", time_system="recording"):
+def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, verbose=True, source="ethoscope", time_system="recording", **kwargs):
+
+
     try:
         if verbose is True:
             if metadata["machine_name"].iloc[i] == "1X":
@@ -563,13 +571,14 @@ def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, 
         if np.isnan(reference_hour):
             reference_hour = meta["reference_hour"]
 
-        data = read_single_roi(
+        data, meta_info = read_single_roi(
             meta = meta,
             min_time = min_time,
             max_time = max_time,
             reference_hour = reference_hour,
             cache = cache,
             time_system=time_system,
+            **kwargs,
         )
 
         if data is None:
@@ -580,22 +589,23 @@ def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, 
         if FUN is not None:
             data = FUN(data)
 
-            
 
         if data is None:
             if verbose is True:
                 print('ROI_{} from {} was unable to load due to an error in applying the function'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
             return
         data.insert(0, 'id', metadata['id'].iloc[i])
-        return data
+        return data, meta_info
     
-    except:
+    except Exception as error:
         if verbose is True:
             print('ROI_{} from {} was unable to load due to an error loading roi'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
+            print(error)
         return
 
     
-def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour = None, cache = None, FUN = None, verbose = True, source="ethoscope", time_system="recording", n_jobs=1):
+def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour = None, cache = None, FUN = None, verbose = True,
+                source="ethoscope", time_system="recording", n_jobs=1, **kwargs):
     """
     A wrapper function to iterate through the dataframe generated by link_meta_index() and load the corresponding database files 
     and analyse them according to the inputted fucntion.
@@ -612,6 +622,8 @@ def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour
     """
 
     data = pd.DataFrame()
+    meta_info_all=[]
+
 
     # for i in range(len(metadata.index)):           
     #     data=load_data(i, metadata, min_time, max_time, reference_hour=reference_hour, cache=cache, FUN=FUN, verbose=verbose, source=source)
@@ -622,16 +634,23 @@ def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour
         joblib.delayed(
             load_data
         )(
-            i, metadata, min_time, max_time, reference_hour=reference_hour, cache=cache, FUN=FUN, verbose=verbose, source=source, time_system=time_system
+            i, metadata, min_time, max_time, reference_hour=reference_hour, cache=cache, FUN=FUN, verbose=verbose,
+            source=source, time_system=time_system, **kwargs
         )
         for i in range(len(metadata.index))
     )
 
     for d in Output:
         if d is not None:
-            data = pd.concat([data, d], ignore_index= True)
+            dd, meta_info = d
+            data = pd.concat([data, dd], ignore_index= True)
+            meta_info_all.append(meta_info)
 
-    return data
+    if source == "ethoscope":
+        return data
+    elif source == "flyhostel":
+        return data, meta_info_all
+
 
 def load_ethoscope(*args, **kwargs):
     return load_device(*args, **kwargs, source="ethoscope")

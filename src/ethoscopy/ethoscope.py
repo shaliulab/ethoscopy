@@ -30,7 +30,8 @@ def read_single_roi(meta, min_time = 0, max_time = float('inf'), reference_hour 
         path = Path(cache) / Path(cache_name)
         if path.exists():
             data = pd.read_pickle(path)
-            return data
+            # TODO meta_info is not returned here
+            return data, {}
 
     try:
         conn = sqlite3.connect(meta['path'])
@@ -41,7 +42,7 @@ def read_single_roi(meta, min_time = 0, max_time = float('inf'), reference_hour 
 
         if len(roi_row.index) < 1:
             print('ROI {} does not exist, skipping'.format(meta['region_id']))
-            return None
+            return None, None
 
         var_df = pd.read_sql_query('SELECT * FROM VAR_MAP', conn)
         date = pd.read_sql_query('SELECT value FROM METADATA WHERE field = "date_time"', conn)
@@ -62,6 +63,7 @@ def read_single_roi(meta, min_time = 0, max_time = float('inf'), reference_hour 
         if 'id' in data.columns:
             data = data.drop(columns = ['id'])
 
+        t_after_ref=0
         if reference_hour != None:
             t = date
             t = t.split(' ')
@@ -93,7 +95,7 @@ def read_single_roi(meta, min_time = 0, max_time = float('inf'), reference_hour 
         if cache is not None:
             data.to_pickle(path)
 
-        return data
+        return data, {"t_after_ref": t_after_ref}
     
     except Exception as error:
         print(traceback.print_exc())

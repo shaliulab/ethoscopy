@@ -55,14 +55,23 @@ class behavpy(pd.DataFrame):
         def _from_axes(self, *args, **kwargs):
             return self.cls._from_axes(*args, **kwargs)
 
-    def __init__(self, data, meta, check = False, index= None, columns=None, dtype=None, copy=True):
-        super(behavpy, self).__init__(data=data,
-                                        index=index,
-                                        columns=columns,
-                                        dtype=dtype,
-                                        copy=copy)
+    def __init__(self, data, meta, check = False, index= None, columns=None, dtype=None, copy=True, sort=False):
+        
+        if sort:
+            cols = ["t"]
+            if "id" in data.columns:
+                cols += ["id"]
+            data.sort_values(cols, inplace=True)
 
-        self.meta = meta   
+        super(behavpy, self).__init__(
+            data=data,
+            index=index,
+            columns=columns,
+            dtype=dtype,
+            copy=copy
+        )
+
+        self.meta = meta
 
         if check is True:
             self._check_conform(self)
@@ -1095,7 +1104,7 @@ class behavpy(pd.DataFrame):
             new[t_column] = new[t_column] + (new['tmp_col'] * (60*60*24))
             return new.drop(columns = ['tmp_col'])
 
-    def heatmap(self, variable = 'moving', t_column = 't', title = '', bin_secs=1800, bin_size=5):
+    def heatmap(self, variable = 'moving', t_column = 't', title = '', bin_secs=1800, bin_size=5, x_label='ZT Time (Hours)'):
         """
         Creates an aligned heatmap of the movement data binned to 30 minute intervals using plotly
         
@@ -1109,13 +1118,33 @@ class behavpy(pd.DataFrame):
         if variable == 'moving':
             heatmap_df[variable] = np.where(heatmap_df[variable] == True, 1, 0)
 
+        feat_dfs=[]
+        feats=["frame_number"]
+
+        for column in feats:
+            function="min"
+            out = heatmap_df.bin_time(column = column, bin_secs = bin_secs, t_column = "t", function=function)
+            out.rename({f"{column}_{function}": column}, axis=1, inplace=True)
+            feat_dfs.append(
+                out
+            )
+
         heatmap_df = heatmap_df.bin_time(column = variable, bin_secs = bin_secs, t_column = t_column)
+        meta = heatmap_df.meta
+        for df in feat_dfs:
+            heatmap_df=pd.merge(heatmap_df.set_index("t_bin", append=True), df.set_index("t_bin", append=True), left_index=True, right_index=True).reset_index().set_index("id")
+        
+        heatmap_df=self.__class__(data=heatmap_df, meta=meta, check=True)
         heatmap_df['t_bin'] = heatmap_df['t_bin'] / 3600
         # create an array starting with the earliest half hour bin and the last with 0.5 intervals
         start = heatmap_df['t_bin'].min().astype(int)
         end = heatmap_df['t_bin'].max().astype(int)
         time_list = np.array([x / (3600 // bin_secs) for x in range(start*(3600 // bin_secs), end*(3600 // bin_secs)+bin_size, bin_size)])
         time_map = pd.Series(time_list, name = 't_bin')
+
+        backup=heatmap_df.copy()
+
+
 
         def align_data(data):
             """merge the individual fly groups time with the time map, filling in missing points with NaN values"""
@@ -1137,11 +1166,29 @@ class behavpy(pd.DataFrame):
         gbm = heatmap_df.groupby(heatmap_df.index)[f'{variable}_mean'].apply(list)
         id = heatmap_df.groupby(heatmap_df.index)['t_bin'].mean().index.tolist()
 
-        fig = go.Figure(data=go.Heatmap(
-                        z = gbm,
-                        x = time_list,
-                        y = id,
-                        colorscale = 'Viridis'))
+        hover_text = []
+        for i in range(heatmap_df.shape[0]):
+            row=heatmap_df.iloc[i]
+            data=[f"x:{time_list[i]}", f"y:{id[i]}", f"z:{gbm[i]}"]
+
+            data +=[
+                f"{feat}:{row[feat]}"
+                for feat in feats
+
+            ]
+            break
+
+        fig = go.Figure(
+            data=go.Heatmap(
+                z = gbm,
+                x = time_list,
+                y = id,
+                colorscale = 'Viridis',
+                # text=hover_text,  # include hover text
+                # hoverinfo='text'  # specify that hover should display the text
+
+            )
+        )
 
         fig.update_layout(
             title = title,
@@ -1151,7 +1198,7 @@ class behavpy(pd.DataFrame):
                 linecolor = 'black',
                 gridcolor = 'black',
                 title = dict(
-                    text = 'ZT Time (Hours)',
+                    text = x_label,
                     font = dict(
                         size = 18,
                         color = 'black'
@@ -1164,7 +1211,7 @@ class behavpy(pd.DataFrame):
                 linewidth = 2)
                 )
 
-        return fig
+        return fig, heatmap_df
 
     def remove(self, column, *args):
         """ 

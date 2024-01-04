@@ -1,4 +1,5 @@
 import traceback
+import pickle
 import os.path
 import logging
 import math
@@ -13,6 +14,7 @@ import pandas as pd
 
 from ethoscopy.misc.xy_dist_log10x1000 import compute_xy_dist_log10x1000
 from ethoscopy.misc.format_warning import format_warning
+from ethoscopy.misc.t_utils import load_hour_start, compute_t_after_ref
 
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
@@ -46,22 +48,16 @@ def read_qc_single_path(path, reference_hour):
     chunk_starts=pd.DataFrame.from_records(chunk_starts, columns=["chunk", "t"])
     qc = pd.merge(qc, chunk_starts, left_on="chunk", right_on="chunk")
     qc["path"] = path
-    return qc    
+    return qc
 
-
-def load_hour_start(date):
-    t = date
-    t = t.split(' ')
-    hh, mm, ss = map(int, t[1].split(':'))
-    return hh
-    #return  hh # + mm/60 + ss/3600
 
 def read_single_roi(meta,
                     min_time = -float('inf'),
                     max_time = float('inf'),
                     reference_hour = None,
                     cache=None,
-                    time_system="recording"
+                    time_system="recording",
+                    stride=1
 ):
     """
     meta (pd.Series): with columns machine_id, date, path, region_id
@@ -70,7 +66,6 @@ def read_single_roi(meta,
     refererence_hour (int): Number of hours since midnight in recording computer in its timezone (GMT)
     cache (str): Path to folder where cache files may be stored
     """
-
 
     if min_time > max_time:
         exit('Error: min_time is larger than max_time')
@@ -81,16 +76,26 @@ def read_single_roi(meta,
         region_id = meta["region_id"]
 
     if cache is not None:
-        cache_name = 'cached_{}_{}_{}_t0_{}_t1_{}.pkl'.format(meta['machine_id'], region_id, meta['date'], min_time, max_time)
+        cache_name = 'cached_{}_{}_{}_t0_{}_t1_{}_stride_{}.pkl'.format(meta['machine_id'], region_id, meta['date'], min_time, max_time, stride)
+        cache_name_meta = 'cached_{}_{}_{}_t0_{}_t1_{}_stride_{}_meta.pkl'.format(meta['machine_id'], region_id, meta['date'], min_time, max_time, stride)
         path = Path(cache) / Path(cache_name)
+        path_meta = Path(cache) / Path(cache_name_meta)
         if path.exists():
             logging.debug(f"Loading {path}")
-            data = pd.read_pickle(path)
-            return data
+            before=time.time()
+            try:
+                data = pd.read_pickle(path)
+                with open(path_meta, "rb") as filehandle:
+                    meta_info = pickle.load(filehandle)
+                after=time.time()
+                print(f"Loading {path} took {after-before} seconds")
+                return data, meta_info
+            except Exception as error:
+                print(f"Cannot load {path}")
+                print(error)
     conn = None
 
     try:
-
         uri=f"file:{meta['path']}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         
@@ -99,10 +104,10 @@ def read_single_roi(meta,
 
 
         var_df = pd.read_sql_query('SELECT * FROM VAR_MAP', conn)
-        date = pd.read_sql_query('SELECT value FROM METADATA WHERE field = "date_time"', conn)
+        date_time = pd.read_sql_query('SELECT value FROM METADATA WHERE field = "date_time"', conn)
 
         # isolate date_time string and parse to GMT with format YYYY-MM-DD HH-MM-SS
-        date = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(date.iloc[0])))
+        date_time = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(date_time.iloc[0])))
         if math.isinf(min_time):
             min_time = None
         if math.isinf(max_time):
@@ -110,16 +115,21 @@ def read_single_roi(meta,
 
 
         if reference_hour is not None and time_system == "zt":
-            offset=(load_hour_start(date) - reference_hour)*3600
+            offset=(load_hour_start(date_time) - reference_hour)*3600
             if min_time is not None:
                 min_time = min_time - offset
             if max_time is not None:
                 max_time = max_time - offset
+
+        if stride == 1:
+            frame_number_constraint = None
+        else:
+            frame_number_constraint = f" R0.frame_number % {stride} = 0"
         
         if min_time is None and max_time is None:
-            frame_time_constraint = ""
+            frame_time_constraint = None
         else:
-            frame_time_constraint = """WHERE
+            frame_time_constraint = """
                 IDX.frame_time """
             
             if min_time is not None and max_time is not None:
@@ -130,6 +140,13 @@ def read_single_roi(meta,
                 frame_time_constraint += f"> {min_time*1000}"
 
         #sql_query takes roughly 2.8 seconds for 2.5 days of data
+        parts=[frame_number_constraint, frame_time_constraint]
+        parts=[part for part in parts if part is not None]
+        where_clause=" AND ".join(parts)
+
+
+        if where_clause != "":
+            where_clause=f"WHERE {where_clause}"
 
         if region_id == 0:
             sql_query =  f"""
@@ -146,7 +163,7 @@ def read_single_roi(meta,
                 FROM
                     ROI_0 AS R0, const
                     INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number
-                {frame_time_constraint};
+                {where_clause};
                 """
                     # INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number AND IDX.half_second = 1;
 
@@ -165,7 +182,7 @@ def read_single_roi(meta,
                     ROI_0 AS R0
                     INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number
                     INNER JOIN IDENTITY AS ID on R0.frame_number = ID.frame_number AND ID.in_frame_index = R0.in_frame_index AND ID.identity = {region_id}
-                {frame_time_constraint};
+                {where_clause};
                 """
                     # INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number AND IDX.half_second = 1
        
@@ -179,9 +196,9 @@ def read_single_roi(meta,
         data.t /= 1e3
 
         # seconds since start to seconds since zt0
+        t_after_ref=0
         if reference_hour is not None:
-            hour_start=load_hour_start(date)
-            t_after_ref = ((hour_start - reference_hour) % 24) * 3600
+            t_after_ref=compute_t_after_ref(date_time, reference_hour)
             data.t = (data.t + t_after_ref)
     
         roi_width = max(roi_row['w'].iloc[0], roi_row['h'].iloc[0])
@@ -207,11 +224,15 @@ def read_single_roi(meta,
         data["phi"] = 0
         data["w"] = 0
         data["h"] = 0
+        meta_info={"t_after_ref": t_after_ref}
+
 
         if cache is not None:
             data.to_pickle(path)
+            with open(path_meta, "wb") as filehandle:
+                pickle.dump(meta_info, filehandle)
 
-        return data
+        return data, meta_info
     
     except Exception as error:
         file=meta['[path]']
@@ -222,5 +243,6 @@ def read_single_roi(meta,
     finally:
         if conn is not None:
             conn.close()
+
 
 
