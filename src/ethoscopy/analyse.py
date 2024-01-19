@@ -235,6 +235,7 @@ def sleep_annotation(data,
     
     return d_small
 
+
 def puff_mago(data, start_response_window = 0, response_window_length = 10, add_false = False, velocity_correction_coef = 3e-3):
     """
     Puff_mago finds interaction times from raw ethoscope data to detect responses in a given window.

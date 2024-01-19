@@ -1,4 +1,5 @@
 import ftplib
+import logging
 import glob
 import traceback
 import os.path
@@ -22,6 +23,7 @@ from ethoscopy.ethoscope import read_single_roi as read_ethoscope_single_roi
 from ethoscopy.flyhostel import read_single_roi as read_flyhostel_single_roi
 from ethoscopy.flyhostel import read_qc_single_path, load_hour_start
 
+logger=logging.getLogger(__name__)
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
 
@@ -389,7 +391,7 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
         except Exception as e:
             print("An error occurred: ", e)
     else:
-        raise FileNotFoundError("The metadata is not readable")
+        raise FileNotFoundError(f"The metadata file {metadata} is not readable")
 
     if len(meta_df[meta_df.isna().any(axis=1)]) >= 1:
         print(meta_df[meta_df.isna().any(axis=1)])
@@ -437,7 +439,7 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
         check_list, paths = list_files(remote_dir, list(set(ethoscope_list)), source=source)
 
     if len(paths) == 0:
-        warnings.warn("No Ethoscope data could be found, please check the metatadata file")
+        warnings.warn("No Ethoscope data could be found, please check the metadata file")
         exit()
     
     for k, i in enumerate(zip(ethoscope_list, date_list)):
@@ -568,6 +570,9 @@ def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, 
 
 
         meta = metadata.iloc[i,:]
+        # if reference_hour is None:
+        #     reference_hour=np.nan
+
         if np.isnan(reference_hour):
             reference_hour = meta["reference_hour"]
 
@@ -587,6 +592,7 @@ def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, 
             return
 
         if FUN is not None:
+            logger.debug("Applying function %s to centroid data", FUN)
             data = FUN(data)
 
 
@@ -600,6 +606,7 @@ def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, 
     except Exception as error:
         if verbose is True:
             print('ROI_{} from {} was unable to load due to an error loading roi'.format(metadata['region_id'].iloc[i], metadata['machine_name'].iloc[i]))
+            print(traceback.print_exc())
             print(error)
         return
 
@@ -624,10 +631,6 @@ def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour
     data = pd.DataFrame()
     meta_info_all=[]
 
-
-    # for i in range(len(metadata.index)):           
-    #     data=load_data(i, metadata, min_time, max_time, reference_hour=reference_hour, cache=cache, FUN=FUN, verbose=verbose, source=source)
-    #     data = pd.concat([data, data], ignore_index= True)
 
     # iterate over the ROI of each ethoscope in the metadata df
     Output = joblib.Parallel(n_jobs=n_jobs)(
