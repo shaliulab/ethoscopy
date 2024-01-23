@@ -441,6 +441,13 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
     if len(paths) == 0:
         warnings.warn("No Ethoscope data could be found, please check the metadata file")
         exit()
+
+    counts=pd.Series([os.path.basename(path) for path, _ in paths]).value_counts()
+    if (counts>1).sum() > 0:
+        logger.error("The same dbfile is present in more than 1 entry. Please correct that")
+        print(counts.loc[counts>1])
+        raise ValueError
+
     
     for k, i in enumerate(zip(ethoscope_list, date_list)):
         if list(i) in check_list:
@@ -496,9 +503,13 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
     database = paths
 
     for i, path in enumerate(path_name):
+        added=0
         for j, (entry, _) in enumerate(database):
             if path in entry:
+                if added>0:
+                    raise ValueError(f"Path {path} appears in more than 1 entry")
                 path_list.append(entry)
+                added+=1
 
     #join the db path name with the users directory
     full_path_list = []
