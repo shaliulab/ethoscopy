@@ -57,7 +57,9 @@ def read_single_roi(meta,
                     reference_hour = None,
                     cache=None,
                     time_system="recording",
-                    stride=1
+                    stride=1,
+                    identity_table="IDENTITY",
+                    roi_0_table="ROI_0",
 ):
     """
     meta (pd.Series): with columns machine_id, date, path, region_id
@@ -144,6 +146,7 @@ def read_single_roi(meta,
         parts=[part for part in parts if part is not None]
         where_clause=" AND ".join(parts)
 
+        print(f"Loading identity from {identity_table} and coordinates from {roi_0_table}")
 
         if where_clause != "":
             where_clause=f"WHERE {where_clause}"
@@ -161,11 +164,10 @@ def read_single_roi(meta,
                     R0.y,
                     R0.modified
                 FROM
-                    ROI_0 AS R0, const
+                    {roi_0_table} AS R0, const
                     INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number
                 {where_clause};
                 """
-                    # INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number AND IDX.half_second = 1;
 
         else:
             sql_query = f"""
@@ -179,12 +181,11 @@ def read_single_roi(meta,
                     R0.y,
                     R0.modified
                 FROM
-                    ROI_0 AS R0
+                    {roi_0_table} AS R0
                     INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number
-                    INNER JOIN IDENTITY AS ID on R0.frame_number = ID.frame_number AND ID.in_frame_index = R0.in_frame_index AND ID.identity = {region_id}
+                    INNER JOIN {identity_table} AS ID on R0.frame_number = ID.frame_number AND ID.in_frame_index = R0.in_frame_index AND ID.identity = {region_id}
                 {where_clause};
                 """
-                    # INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number AND IDX.half_second = 1
        
         logging.debug(f"Running query {sql_query}")
         before=time.time()
