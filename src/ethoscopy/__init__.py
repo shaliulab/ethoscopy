@@ -19,10 +19,10 @@ except Exception as error:
 from ethoscopy.load import download_from_remote_dir, link_meta_index, load_ethoscope, load_flyhostel, load_qc
 from ethoscopy.analyse import max_velocity_detector, sleep_annotation, flyhostel_sleep_annotation, puff_mago, find_motifs, isolate_activity_lengths
 
-if sys.version_info >= (3, 8):
-    from importlib import metadata
-    __version__ = metadata.version("ethoscopy")
-
-else:
-    from importlib_metadata import metadata
-    __version__ = metadata("ethoscopy").get("version")
+#if sys.version_info >= (3, 8):
+#    from importlib import metadata
+#    __version__ = metadata.version("ethoscopy")
+#
+#else:
+#    from importlib_metadata import metadata
+#    __version__ = metadata("ethoscopy").get("version")
