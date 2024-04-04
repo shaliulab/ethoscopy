@@ -8,16 +8,17 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 #python = ">=3.8"
-pandas = "^1.4.2"
-numpy = "^1.22.3"
+pandas = "^1.0.0"
+#numpy = "^1.22.3"
+numpy = "^1.0.0"
 plotly = "^5.7.0"
-scipy = "^1.8.0"
+scipy = "^1.0.0"
 tabulate = "^0.8.10"
 colour = "^0.1.5"
 kaleido = "0.2.1"
 hmmlearn = "0.2.8"
-astropy = "^5.1.1"
-PyWavelets = "^1.4.1"
+#astropy = "^5.1.1"
+#PyWavelets = "^1.4.1"
 
 [tool.poetry.dev-dependencies]
 
