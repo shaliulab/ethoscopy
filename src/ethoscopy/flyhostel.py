@@ -63,14 +63,13 @@ def write_query(region_id, min_time, max_time, stride, roi_0_table, identity_tab
         frame_time_constraint = None
     else:
 
-        duration_s = (max_time - min_time)/1000
-        number_of_frames = duration_s // framerate - 1
+        duration_s = (max_time - min_time)
+        number_of_frames = duration_s * framerate - 1
         number_of_animals = 1
         number_of_rows = number_of_frames * number_of_animals
         limit_clause = f"LIMIT {number_of_rows}"
 
-        frame_time_constraint = """
-            IDX.frame_time """
+        frame_time_constraint = "IDX.frame_time "
         
         if min_time is not None and max_time is not None:
             frame_time_constraint += f"BETWEEN {min_time*1000} AND {max_time*1000}"
@@ -93,7 +92,9 @@ def write_query(region_id, min_time, max_time, stride, roi_0_table, identity_tab
 
     if where_clause != "":
         where_clause=f"WHERE {where_clause}"
-        
+
+    limit_clause=""
+
     if region_id == 0:
         sql_query=f"""
             WITH const AS (SELECT 0 AS identity)
@@ -108,9 +109,7 @@ def write_query(region_id, min_time, max_time, stride, roi_0_table, identity_tab
                 R0.modified
             FROM
                 {roi_0_table} AS R0, const
-                INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number
-            {where_clause}
-            {limit_clause};
+                INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number {where_clause} {limit_clause};
             """
     else:
         sql_query=f"""
@@ -130,13 +129,11 @@ def write_query(region_id, min_time, max_time, stride, roi_0_table, identity_tab
                     INNER JOIN STORE_INDEX AS IDX on R0.frame_number = IDX.frame_number
                     INNER JOIN {identity_table} AS ID on R0.frame_number = ID.frame_number 
                         AND ID.in_frame_index = R0.in_frame_index 
-                        AND ID.identity = {region_id}
-                {where_clause}
-                {limit_clause};
+                        AND ID.identity = {region_id} {where_clause} {limit_clause}
+            );
         """
 
     return sql_query
-
 
 
 def load_start_time(path):
@@ -149,7 +146,7 @@ def load_start_time(path):
         date_time = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(date_time.iloc[0])))
 
     except Exception as error:
-        file=meta['[path]']
+        file=meta['path']
         print(f"Cannot load data in file {file}")
         print(traceback.print_exc())
         print(error)
@@ -196,22 +193,22 @@ def read_single_roi(meta,
     else:
         cache_name = 'cached_{}_{}_{}_stride_{}_RAW.pkl'.format(meta['machine_id'], region_id, meta['date'], stride)
         cache_name_meta = 'cached_{}_{}_{}_stride_{}_meta_RAW.pkl'.format(meta['machine_id'], region_id, meta['date'], stride)
-    path = Path(cache) / Path(cache_name)
-    path_meta = Path(cache) / Path(cache_name_meta)
+    cache_path = Path(cache) / Path(cache_name)
+    cache_path_meta = Path(cache) / Path(cache_name_meta)
     loaded_from_cache=False
 
-    if path.exists():
-        print(f"Loading {path}")
+    if cache_path.exists():
+        print(f"Loading {cache_path}")
         before=time.time()
         try:
-            data = pd.read_pickle(path)
-            with open(path_meta, "rb") as filehandle:
+            data = pd.read_pickle(cache_path)
+            with open(cache_path_meta, "rb") as filehandle:
                 meta_info = pickle.load(filehandle)
             loaded_from_cache=True
             after=time.time()
-            print(f"Loading {path} took {after-before} seconds")
+            print(f"Loading {cache_path} took {after-before} seconds")
         except Exception as error:
-            print(f"Cannot load {path}")
+            print(f"Cannot load {cache_path}")
             print(error)
             data=None
             meta_info=None
@@ -247,13 +244,6 @@ def read_single_roi(meta,
         roi_df = pd.read_sql_query('SELECT * FROM ROI_MAP', conn)
         roi_row = roi_df[roi_df['roi_idx'] == 0]
         var_df = pd.read_sql_query('SELECT * FROM VAR_MAP', conn)
-
-
-        # isolate date_time string and parse to GMT with format YYYY-MM-DD HH-MM-SS
-        if math.isinf(min_time):
-            min_time = None
-        if math.isinf(max_time):
-            max_time = None
 
         sql_query = write_query(region_id, min_time, max_time, stride, roi_0_table, identity_table)
 
@@ -299,13 +289,13 @@ def read_single_roi(meta,
 
 
         if not loaded_from_cache and cache is not None and min_time is None and max_time is None:
-            data.to_pickle(path)
-            with open(path_meta, "wb") as filehandle:
+            data.to_pickle(cache_path)
+            with open(cache_path_meta, "wb") as filehandle:
                 pickle.dump(meta_info, filehandle)
 
     
     except Exception as error:
-        file=meta['[path]']
+        file=meta['path']
         print(f"Cannot load data in file {file}")
         print(traceback.print_exc())
         print(error)
