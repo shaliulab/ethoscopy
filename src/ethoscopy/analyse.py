@@ -15,7 +15,7 @@ def max_velocity_detector(data,
                         time_window_length,
                         velocity_correction_coef = 3e-3,
                         masking_duration = 6,
-                        optional_columns = ['has_interacted']
+                        optional_columns = ['has_interacted'],
                         ):
     """ 
     Max_velocity_detector is the default movement classification for real-time ethoscope experiments.
@@ -59,6 +59,8 @@ def max_velocity_detector(data,
 
     dt['interaction_id'] = dt['has_interacted'].cumsum()
     dt['mask'] = dt.groupby('interaction_id', group_keys = False)['t'].apply(lambda x: pd.Series(np.where(x < (x.min() + masking_duration), True, False), index=x.index))
+
+
     dt['beam_cross'] = dt['beam_cross'] & ~dt['mask']
     dt = dt.drop(columns = ['interaction_id', 'mask'])
 
@@ -91,7 +93,8 @@ def max_velocity_detector(data,
 def prep_data_motion_detector(data,
                             needed_columns,
                             time_window_length = 10,
-                            optional_columns = ["has_interacted"]
+                            optional_columns = ["has_interacted"],
+                            min_p=20
                             ):
     """ 
     This function bins all points of the time series column into a specified window.
@@ -144,7 +147,7 @@ def prep_data_motion_detector(data,
 
         return data
 
-    dc = curate_sparse_roi_data(dc)
+    dc = curate_sparse_roi_data(dc, min_p=min_p)
 
     return dc
 
@@ -167,13 +170,37 @@ def flyhostel_sleep_annotation(data, *args, **kwargs):
     return sleep_annotation(data, *args, **kwargs)
 
 
+def sleep_contiguous(moving, fs, min_valid_time = 300):
+    """ 
+    Checks if contiguous bouts of immobility are greater than the minimum valid time given
+
+    Params:
+    @moving = pandas series, series object comtaining the movement data of individual flies
+    @fs = int, sampling frequency (Hz) to scale minimum length to time in seconds
+    @min_valid_time = min amount immobile time that counts as sleep, default is 300 (i.e 5 mins) 
+    
+    returns a list object to be added to a pandas dataframe
+    """
+    min_len = fs * min_valid_time
+    r_sleep =  rle(np.logical_not(moving))
+    valid_runs = r_sleep[2] >= min_len 
+    r_sleep_mod = valid_runs & r_sleep[0]
+    r_small = []
+    for c, i in enumerate(r_sleep_mod):
+        r_small += ([i] * r_sleep[2][c])
+
+    return r_small
+    
+
+
 def sleep_annotation(data,
                     time_window_length = 10,
                     min_time_immobile = 300,
                     motion_detector_FUN = max_velocity_detector,
                     masking_duration = 6,
                     velocity_correction_coef = 3e-3,
-                    optional_columns=["has_interacted"]
+                    optional_columns=["has_interacted"],
+                    mask=None
                     ):
     """ 
     This function first uses a motion classifier to decide whether an animal is moving during a given time window.
@@ -186,6 +213,8 @@ def sleep_annotation(data,
     @motion_detector_FUN = function, the function to curate raw ethoscope data into velocity measurements, default is max_velocity_detector
     @masking_duration, int, number of seconds during which any movement is ignored (velocity is set to 0) after a stimulus is delivered (a.k.a. interaction),
     @velocity_correction_coef = float, a coefficient to correct the velocity data (change for different length tubes), default is 3e-3
+    @mask = dataset of id, frame_number and t that contains points in time and identity space where movement should be ignored.
+    This is useful if you need to mask some event that happened independent of the fly whose sleep is being quantified
     for beam_cross column, default is 6
     returns a pandas dataframe containing columns 'moving' and 'asleep'
     """
@@ -196,6 +225,20 @@ def sleep_annotation(data,
         return None
     
     d_small = motion_detector_FUN(data, time_window_length, masking_duration = masking_duration, velocity_correction_coef = velocity_correction_coef, optional_columns=optional_columns)
+
+    if mask is not None:
+        mask=prep_data_motion_detector(
+            mask,
+            needed_columns = ["frame_number", "t"],
+            time_window_length = time_window_length,
+            optional_columns = [],
+            min_p=0
+        )
+        counts=mask.groupby("t_round").size().reset_index(name="animal_interactions")
+        d_small=d_small.merge(counts.rename({"t_round": "t"}, axis=1), on="t", how="left")
+        d_small.loc[d_small["animal_interactions"].isna(), "animal_interactions"]=0
+    else:
+        d_small["animal_interactions"]=0
 
     if len(d_small.index) < 100:
         print(f"Less than 100 time windows ({len(d_small.index)})")
@@ -209,30 +252,25 @@ def sleep_annotation(data,
     d_small = d_small.merge(time_map, how = 'right', on = 't', copy = False).sort_values(by=['t'])
     d_small['is_interpolated'] = np.where(d_small['t'].isin(missing_values), True, False)
     d_small['moving'] = np.where(d_small['is_interpolated'] == True, False, d_small['moving'])
-
-    def sleep_contiguous(moving, fs, min_valid_time = 300):
-        """ 
-        Checks if contiguous bouts of immobility are greater than the minimum valid time given
-
-        Params:
-        @moving = pandas series, series object comtaining the movement data of individual flies
-        @fs = int, sampling frequency (Hz) to scale minimum length to time in seconds
-        @min_valid_time = min amount immobile time that counts as sleep, default is 300 (i.e 5 mins) 
-        
-        returns a list object to be added to a pandas dataframe
-        """
-        min_len = fs * min_valid_time
-        r_sleep =  rle(np.logical_not(moving)) 
-        valid_runs = r_sleep[2] >= min_len 
-        r_sleep_mod = valid_runs & r_sleep[0]
-        r_small = []
-        for c, i in enumerate(r_sleep_mod):
-            r_small += ([i] * r_sleep[2][c])
-
-        return r_small
-
-    d_small['asleep'] = sleep_contiguous(d_small['moving'], 1/time_window_length, min_valid_time = min_time_immobile)
     
+
+
+    
+    moving_or_interacting=np.bitwise_and(
+        d_small['moving'],
+        d_small["animal_interactions"]==0
+    )
+
+    # print(
+    #     d_small["moving"].mean(),
+    #     np.bitwise_and(moving_or_interacting, d_small["moving"]).mean()
+    # )
+
+    d_small['asleep'] = sleep_contiguous(
+        moving_or_interacting,
+        1/time_window_length, min_valid_time = min_time_immobile
+    )
+
     return d_small
 
 

@@ -27,12 +27,12 @@ logger=logging.getLogger(__name__)
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
 
-def update_metadata(meta_loc, prefix="ethoscope&flyhostel_metadata3"):
+def update_metadata(meta_loc, prefix="ethoscope&flyhostel_metadata4"):
     """
     Puts together a single metadata.csv with all flies available in /flyhostel_metadata/ with the passed prefix
     """
-    metadatas=glob.glob("/flyhostel_data/metadata/*")
-    paths=[path for path in metadatas if os.path.basename(path).startswith(prefix)]
+    paths=glob.glob(f"/flyhostel_data/metadata/{prefix}*")
+    # paths=[path for path in metadatas if os.path.basename(path).startswith(prefix)]
     metadatas=[pd.read_csv(path) for path in paths]
     columns, counts = np.unique(list(itertools.chain(*[metadata.columns for metadata in metadatas])), return_counts=True)
     missing_columns=columns[counts!=len(metadatas)]
@@ -395,8 +395,10 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
 
     if len(meta_df[meta_df.isna().any(axis=1)]) >= 1:
         print(meta_df[meta_df.isna().any(axis=1)])
-        warnings.warn("When the metadata is read it contains NaN values (empty cells in the csv file can cause this!), please replace with an alterative")
+        print("When the metadata is read it contains NaN values (empty cells in the csv file can cause this!), please replace with an alterative")
+        time.sleep(1)
         exit()
+
 
     # check and tidy df, removing un-needed columns and duplicated machine names
     if 'machine_name' not in meta_df.columns or 'date' not in meta_df.columns:
@@ -558,7 +560,6 @@ def load_qc(metadata, reference_hour=None):
 
 def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, verbose=True, source="ethoscope", time_system="recording", **kwargs):
 
-
     try:
         if verbose is True:
             if metadata["machine_name"].iloc[i] == "1X":
@@ -572,17 +573,12 @@ def load_data(i, metadata, min_time, max_time, reference_hour, cache, FUN=None, 
                     f"{metadata['machine_id'].iloc[i][:10]}/{metadata['machine_name'].iloc[i]}/{metadata['date'].iloc[i]}"
                 )
             )
-
-        
         if source == "ethoscope":
             read_single_roi = read_ethoscope_single_roi
         elif source=="flyhostel":
             read_single_roi = read_flyhostel_single_roi
 
-
         meta = metadata.iloc[i,:]
-        # if reference_hour is None:
-        #     reference_hour=np.nan
 
         if np.isnan(reference_hour):
             reference_hour = meta["reference_hour"]
@@ -641,8 +637,6 @@ def load_device(metadata, min_time = 0 , max_time = float('inf'), reference_hour
 
     data = pd.DataFrame()
     meta_info_all=[]
-
-
     # iterate over the ROI of each ethoscope in the metadata df
     Output = joblib.Parallel(n_jobs=n_jobs)(
         joblib.delayed(
