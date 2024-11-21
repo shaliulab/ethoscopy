@@ -56,7 +56,7 @@ def assert_logging_level():
     logging.debug("Debug level")
     
 
-def write_query(region_id, min_time, max_time, stride, roi_0_table, identity_table, framerate=150):
+def write_query(region_id, min_time, max_time, min_frame_number, max_frame_number, stride, roi_0_table, identity_table, framerate=150):
     
     if min_time is None and max_time is None:
         limit_clause = ""
@@ -81,10 +81,21 @@ def write_query(region_id, min_time, max_time, stride, roi_0_table, identity_tab
     if stride == 1:
         frame_number_constraint = None
     else:
-        frame_number_constraint = f" R0.frame_number % {stride} = 0"
-        
+        frame_number_constraint = f" R0.frame_number % {stride} = 0 "
+
+    if min_frame_number is None:
+        frame_number_constraint1 = None
+    else:
+        frame_number_constraint1 = f" R0.frame_number >= {min_frame_number} "
+
+    if max_frame_number is None:
+        frame_number_constraint2 = None
+    else:
+        frame_number_constraint2 = f" R0.frame_number < {max_frame_number} "
+
+
     #sql_query takes roughly 2.8 seconds for 2.5 days of data
-    parts=[frame_number_constraint, frame_time_constraint]
+    parts=[frame_number_constraint, frame_number_constraint1, frame_number_constraint2, frame_time_constraint]
     parts=[part for part in parts if part is not None]
     where_clause=" AND ".join(parts)
 
@@ -158,6 +169,25 @@ def load_start_time(path):
     return date_time
 
 
+def load_centroids(dbfile, identity, min_frame_number, max_frame_number, roi_0_table="ROI_0_VAL", identity_table="IDENTITY_VAL"):
+
+    uri=f"file:{dbfile}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    
+    sql_query=write_query(
+        region_id=identity,
+        min_time=None,
+        max_time=None,
+        min_frame_number=min_frame_number,
+        max_frame_number=max_frame_number,
+        stride=1,
+        roi_0_table=roi_0_table,
+        identity_table=identity_table
+    )
+    data = pd.read_sql_query(sql_query, conn)[["frame_number", "x", "y"]]
+    return data
+
+
 
 def read_single_roi(meta,
                     min_time = None,
@@ -197,7 +227,7 @@ def read_single_roi(meta,
     cache_path_meta = Path(cache) / Path(cache_name_meta)
     loaded_from_cache=False
 
-    if cache_path.exists():
+    if cache_path.exists() and min_time is None and max_time is None:
         print(f"Loading {cache_path}")
         before=time.time()
         try:
@@ -223,6 +253,8 @@ def read_single_roi(meta,
         raise f"Start time cannot be loaded from {path}"
     
     if reference_hour is not None and time_system == "zt":
+        # add this amount to a raw timestamp to transform it into zt
+        # subtract it from a zt timestamp to transform it into a raw timestamp
         offset=(load_hour_start(date_time) - reference_hour)*3600
         if min_time is not None:
             min_time = min_time - offset
@@ -231,10 +263,10 @@ def read_single_roi(meta,
 
 
     if data is not None:
-        if min_time is not None:
-            data=data.loc[data["t"] >= min_time]
-        if max_time is not None:
-            data=data.loc[data["t"] < max_time]
+        # if min_time is not None:
+        #     data=data.loc[data["t"] >= min_time]
+        # if max_time is not None:
+        #     data=data.loc[data["t"] < max_time]
 
         return data, meta_info
 
@@ -245,7 +277,10 @@ def read_single_roi(meta,
         roi_row = roi_df[roi_df['roi_idx'] == 0]
         var_df = pd.read_sql_query('SELECT * FROM VAR_MAP', conn)
 
-        sql_query = write_query(region_id, min_time, max_time, stride, roi_0_table, identity_table)
+
+        min_frame_number=None
+        max_frame_number=None
+        sql_query = write_query(region_id, min_time, max_time, min_frame_number, max_frame_number, stride, roi_0_table, identity_table)
 
         logging.debug(f"Running query {sql_query}")
         before=time.time()
