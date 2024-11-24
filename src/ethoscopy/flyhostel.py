@@ -6,12 +6,13 @@ import math
 import warnings
 import time 
 import sqlite3
+import logging
 from sys import exit
 from pathlib import Path
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd 
-
+logger=logging.getLogger(__name__)
 from ethoscopy.misc.xy_dist_log10x1000 import compute_xy_dist_log10x1000
 from ethoscopy.misc.format_warning import format_warning
 from ethoscopy.misc.t_utils import load_hour_start, compute_t_after_ref
@@ -99,7 +100,7 @@ def write_query(region_id, min_time, max_time, min_frame_number, max_frame_numbe
     parts=[part for part in parts if part is not None]
     where_clause=" AND ".join(parts)
 
-    print(f"Loading identity from {identity_table} and coordinates from {roi_0_table}")
+    logger.info(f"Loading identity from {identity_table} and coordinates from {roi_0_table}")
 
     if where_clause != "":
         where_clause=f"WHERE {where_clause}"
@@ -157,10 +158,9 @@ def load_start_time(path):
         date_time = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(date_time.iloc[0])))
 
     except Exception as error:
-        file=meta['path']
-        print(f"Cannot load data in file {file}")
-        print(traceback.print_exc())
-        print(error)
+        logger.error("Cannot load data in %s", path)
+        logger.error(traceback.print_exc())
+        logger.error(error)
 
     finally:
         if conn is not None:
@@ -228,7 +228,7 @@ def read_single_roi(meta,
     loaded_from_cache=False
 
     if cache_path.exists() and min_time is None and max_time is None:
-        print(f"Loading {cache_path}")
+        logger.info(f"Loading {cache_path}")
         before=time.time()
         try:
             data = pd.read_pickle(cache_path)
@@ -236,10 +236,10 @@ def read_single_roi(meta,
                 meta_info = pickle.load(filehandle)
             loaded_from_cache=True
             after=time.time()
-            print(f"Loading {cache_path} took {after-before} seconds")
+            logger.debug(f"Loading {cache_path} took {after-before} seconds")
         except Exception as error:
-            print(f"Cannot load {cache_path}")
-            print(error)
+            logger.error("Cannot load %s", cache_path)
+            logger.error(error)
             data=None
             meta_info=None
     else:
@@ -282,11 +282,13 @@ def read_single_roi(meta,
         max_frame_number=None
         sql_query = write_query(region_id, min_time, max_time, min_frame_number, max_frame_number, stride, roi_0_table, identity_table)
 
-        logging.debug(f"Running query {sql_query}")
+        logging.debug("Running query %s", sql_query)
         before=time.time()
         data = pd.read_sql_query(sql_query, conn)
         after=time.time()
-        logging.debug(f"Done in {after-before} seconds")
+        logging.debug("Done in %s seconds", after-before)
+
+        import ipdb; ipdb.set_trace()
        
         # ms -> seconds
         data.t /= 1e3
@@ -328,12 +330,11 @@ def read_single_roi(meta,
             with open(cache_path_meta, "wb") as filehandle:
                 pickle.dump(meta_info, filehandle)
 
-    
     except Exception as error:
         file=meta['path']
-        print(f"Cannot load data in file {file}")
-        print(traceback.print_exc())
-        print(error)
+        logger.error("Cannot load data in %s", file)
+        logger.error(traceback.print_exc())
+        logger.error(error)
 
     finally:
         if conn is not None:
