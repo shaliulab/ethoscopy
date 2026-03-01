@@ -152,7 +152,7 @@ def prep_data_motion_detector(data,
     return dc
 
 def downsample_to_fps(data, fps):
-    framerate=150
+    raise NotImplementedError
     step=framerate//fps
     data=data.loc[data["frame_number"] % step == 0]
     data.sort_values("t", inplace=True)
@@ -161,9 +161,9 @@ def downsample_to_fps(data, fps):
     return data
 
 
-def flyhostel_sleep_annotation(data, *args, **kwargs):
-    chunksize=45000
-    framerate=150
+def flyhostel_sleep_annotation(data, framerate=None, chunksize=None, *args, **kwargs):
+    assert framerate is None
+    assert chunksize is None
     data=downsample_to_fps(data, fps=2)
     data=data.loc[data["frame_number"] % chunksize != 0]
     data=data.loc[data["frame_number"] % chunksize != framerate//2]
