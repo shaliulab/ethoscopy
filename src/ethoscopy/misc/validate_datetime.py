@@ -28,7 +28,9 @@ def validate_datetime(data):
                             date = datetime.strptime(date, '%d/%m/%Y').strftime('%Y-%m-%d')
                             new_date_list.append(date)
                     except ValueError:
-                        warnings.warn("Incorrect data format, should be YYYY-MM-DD for row: " + str(i+1))
+                        warnings.warn("Incorrect data format for " + date +  " , should be YYYY-MM-DD for row: " + str(i+1))
+                        print("Offending row: ")
+                        print(data.iloc[i])
                         exit()
     if len(new_date_list) == 0:
         return data
