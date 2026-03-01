@@ -57,8 +57,9 @@ def assert_logging_level():
     logging.debug("Debug level")
     
 
-def write_query(region_id, min_time, max_time, min_frame_number, max_frame_number, stride, roi_0_table, identity_table, framerate=150):
+def write_query(region_id, min_time, max_time, min_frame_number, max_frame_number, stride, roi_0_table, identity_table, framerate=None):
     
+    assert framerate is not None
     if min_time is None and max_time is None:
         limit_clause = ""
         frame_time_constraint = None
@@ -263,11 +264,6 @@ def read_single_roi(meta,
 
 
     if data is not None:
-        # if min_time is not None:
-        #     data=data.loc[data["t"] >= min_time]
-        # if max_time is not None:
-        #     data=data.loc[data["t"] < max_time]
-
         return data, meta_info
 
     try:
@@ -287,9 +283,7 @@ def read_single_roi(meta,
         data = pd.read_sql_query(sql_query, conn)
         after=time.time()
         logging.debug("Done in %s seconds", after-before)
-
-        import ipdb; ipdb.set_trace()
-       
+     
         # ms -> seconds
         data.t /= 1e3
 
