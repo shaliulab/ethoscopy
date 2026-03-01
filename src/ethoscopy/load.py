@@ -27,13 +27,21 @@ logger=logging.getLogger(__name__)
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
 
+
+def read_metadata(path):
+    met = pd.read_csv(path)
+    if "identity" in met.columns:
+        assert (met["identity"]=="OK").sum()==0, f"{path} contains invalid identity"
+    return met
+
+
 def update_metadata(meta_loc, prefix="ethoscope&flyhostel_metadata4"):
     """
     Puts together a single metadata.csv with all flies available in /flyhostel_metadata/ with the passed prefix
     """
     paths=glob.glob(f"/flyhostel_data/metadata/{prefix}*")
     # paths=[path for path in metadatas if os.path.basename(path).startswith(prefix)]
-    metadatas=[pd.read_csv(path) for path in paths]
+    metadatas=[read_metadata(path) for path in paths]
     columns, counts = np.unique(list(itertools.chain(*[metadata.columns for metadata in metadatas])), return_counts=True)
     missing_columns=columns[counts!=len(metadatas)]
     all_columns=sorted(list(set(columns)))
@@ -44,7 +52,9 @@ def update_metadata(meta_loc, prefix="ethoscope&flyhostel_metadata4"):
                 metadata[column]="NONE"
 
         metadata["input_metadata"]=paths[i]
-        metadatas2.append(metadata[all_columns + ["input_metadata"]])
+        met=metadata[all_columns + ["input_metadata"]]
+
+        metadatas2.append(met)
     metadata=pd.concat(metadatas2, axis=0)
     metadata=metadata.loc[metadata["flyhostel_date"]!="NONE"]
 
@@ -398,7 +408,6 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
         print("When the metadata is read it contains NaN values (empty cells in the csv file can cause this!), please replace with an alterative")
         time.sleep(1)
         exit()
-
 
     # check and tidy df, removing un-needed columns and duplicated machine names
     if 'machine_name' not in meta_df.columns or 'date' not in meta_df.columns:
