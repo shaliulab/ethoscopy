@@ -59,12 +59,11 @@ def assert_logging_level():
 
 def write_query(region_id, min_time, max_time, min_frame_number, max_frame_number, stride, roi_0_table, identity_table, framerate=None):
     
-    assert framerate is not None
     if min_time is None and max_time is None:
         limit_clause = ""
         frame_time_constraint = None
     else:
-
+        assert framerate is not None
         duration_s = (max_time - min_time)
         number_of_frames = duration_s * framerate - 1
         number_of_animals = 1
@@ -96,7 +95,7 @@ def write_query(region_id, min_time, max_time, min_frame_number, max_frame_numbe
         frame_number_constraint2 = f" R0.frame_number < {max_frame_number} "
 
 
-    #sql_query takes roughly 2.8 seconds for 2.5 days of data
+    #sql_query takes roughly 2.8 seconds for 2.5 days of data @ 150fps
     parts=[frame_number_constraint, frame_number_constraint1, frame_number_constraint2, frame_time_constraint]
     parts=[part for part in parts if part is not None]
     where_clause=" AND ".join(parts)
@@ -199,6 +198,7 @@ def read_single_roi(meta,
                     stride=1,
                     identity_table="IDENTITY",
                     roi_0_table="ROI_0",
+                    framerate = None
 ):
     """
     meta (pd.Series): with columns machine_id, date, path, region_id
@@ -207,6 +207,7 @@ def read_single_roi(meta,
     refererence_hour (int): Number of hours since midnight in recording computer in its timezone (GMT)
     cache (str): Path to folder where cache files may be stored
     """
+    assert framerate is not None
 
     if min_time is not None and max_time is not None and min_time > max_time:
         exit('Error: min_time is larger than max_time')
@@ -276,7 +277,7 @@ def read_single_roi(meta,
 
         min_frame_number=None
         max_frame_number=None
-        sql_query = write_query(region_id, min_time, max_time, min_frame_number, max_frame_number, stride, roi_0_table, identity_table)
+        sql_query = write_query(region_id, min_time, max_time, min_frame_number, max_frame_number, stride, roi_0_table, identity_table, framerate=framerate)
 
         logging.debug("Running query %s", sql_query)
         before=time.time()
