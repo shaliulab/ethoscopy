@@ -404,8 +404,8 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
         raise FileNotFoundError(f"The metadata file {metadata} is not readable")
 
     if len(meta_df[meta_df.isna().any(axis=1)]) >= 1:
-        print(meta_df[meta_df.isna().any(axis=1)])
-        print("When the metadata is read it contains NaN values (empty cells in the csv file can cause this!), please replace with an alterative")
+        print(meta_df[meta_df.isna().any(axis=1)][["region_id", "machine_name", "date", "genotype"]])
+        print("When the metadata is read it contains NaN values (empty cells in the csv file can cause this!), please replace with an alternative")
         time.sleep(1)
         exit()
 
