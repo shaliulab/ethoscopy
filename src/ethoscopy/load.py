@@ -534,10 +534,13 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
     merge_df.insert(0, 'path', full_path_list)
     
     if source == "flyhostel":
+        
         for i, (_, row) in enumerate(merge_df.iterrows()):
             if row["identity"] != "NONE":
                 # print(merge_df[["machine_id", "machine_name", "identity"]].iloc[i])
                 merge_df["region_id"].iloc[i]=row["identity"]
+        # TODO Not needed
+        # merge_df=merge_df.loc[merge_df["region_id"]!="NONE"]
 
         
     merge_df['region_id'] = merge_df['region_id'].astype(int)

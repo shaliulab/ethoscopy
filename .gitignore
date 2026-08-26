@@ -6,3 +6,7 @@ dist/
 __pycache__/
 ethoscopy.egg-info/
 test/
+.ipynb_checkpoints/
+.gitinore
+*.ipynb
+build/
