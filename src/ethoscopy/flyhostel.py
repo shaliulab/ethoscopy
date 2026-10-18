@@ -198,7 +198,8 @@ def read_single_roi(meta,
                     stride=1,
                     identity_table="IDENTITY",
                     roi_0_table="ROI_0",
-                    framerate = None
+                    framerate = None,
+                    t_after_ref_fn = None,
 ):
     """
     meta (pd.Series): with columns machine_id, date, path, region_id
@@ -206,6 +207,8 @@ def read_single_roi(meta,
     max_time (int): ZT time in seconds until which to load the data
     refererence_hour (int): Number of hours since midnight in recording computer in its timezone (GMT)
     cache (str): Path to folder where cache files may be stored
+    t_after_ref_fn (callable): t_after_ref_fn(path, reference_hour) returns the seconds between ZT0 and frame_time = 0.
+        If not passed, the hour of the start time in the METADATA table is used (compute_t_after_ref)
     """
     assert framerate is not None
 
@@ -253,18 +256,30 @@ def read_single_roi(meta,
     date_time=load_start_time(path)
     if date_time is None:
         raise f"Start time cannot be loaded from {path}"
-    
+
+    # add this amount to a raw timestamp to transform it into zt
+    # subtract it from a zt timestamp to transform it into a raw timestamp
+    t_after_ref=0
+    if reference_hour is not None:
+        if t_after_ref_fn is None:
+            t_after_ref=compute_t_after_ref(date_time, reference_hour)
+        else:
+            t_after_ref=t_after_ref_fn(path, reference_hour)
+
     if reference_hour is not None and time_system == "zt":
-        # add this amount to a raw timestamp to transform it into zt
-        # subtract it from a zt timestamp to transform it into a raw timestamp
-        offset=(load_hour_start(date_time) - reference_hour)*3600
         if min_time is not None:
-            min_time = min_time - offset
+            min_time = min_time - t_after_ref
         if max_time is not None:
-            max_time = max_time - offset
+            max_time = max_time - t_after_ref
 
 
     if data is not None:
+        # the cache may have been saved with another t_after_ref
+        cached_t_after_ref=meta_info.get("t_after_ref", 0)
+        if cached_t_after_ref != t_after_ref:
+            logger.warning("%s was cached with t_after_ref = %s. Shifting t to t_after_ref = %s", cache_path, cached_t_after_ref, t_after_ref)
+            data.t = data.t + t_after_ref - cached_t_after_ref
+            meta_info={**meta_info, "t_after_ref": t_after_ref}
         return data, meta_info
 
     try:
@@ -289,10 +304,7 @@ def read_single_roi(meta,
         data.t /= 1e3
 
         # seconds since start to seconds since zt0
-        t_after_ref=0
-        if reference_hour is not None:
-            t_after_ref=compute_t_after_ref(date_time, reference_hour)
-            data.t = (data.t + t_after_ref)
+        data.t = (data.t + t_after_ref)
     
         roi_width = max(roi_row['w'].iloc[0], roi_row['h'].iloc[0])
         for var_n in var_df['var_name']:
