@@ -623,10 +623,20 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
             if row["identity"] != "NONE":
                 # print(merge_df[["machine_id", "machine_name", "identity"]].iloc[i])
                 merge_df["region_id"].iloc[i]=row["identity"]
-        # TODO Not needed
-        # merge_df=merge_df.loc[merge_df["region_id"]!="NONE"]
+        # A fly without identity nor region_id (e.g. a group whose flies were not matched to
+        # idtrackerai's identities yet) cannot be given an id: skip it, so that it does not stop
+        # the flies of every other experiment from loading
+        unnamed=pd.to_numeric(merge_df["region_id"], errors="coerce").isna()
+        if unnamed.any():
+            description_columns=[col for col in FLY_DESCRIPTION_COLUMNS if col in merge_df.columns]
+            skipped=["  " + ", ".join(f"{col}={row[col]!r}" for col in description_columns)
+                     for _, row in merge_df.loc[unnamed].iterrows()]
+            logger.warning(
+                "Skipping %s fly(s) without identity nor region_id in the metadata:\n%s",
+                unnamed.sum(), "\n".join(skipped)
+            )
+            merge_df=merge_df.loc[~unnamed].reset_index(drop=True)
 
-        
     merge_df['region_id'] = astype_or_explain(merge_df, 'region_id', int)
     if "arena" in merge_df.columns:
         arenas = astype_or_explain(merge_df, "arena", int).tolist()
