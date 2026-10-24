@@ -52,6 +52,36 @@ def get_flyhostel_id_prefix(file_name, arena):
     return prefix
 
 
+# columns that identify a fly in the metadata, shown when one of its values is invalid
+FLY_DESCRIPTION_COLUMNS=["machine_id", "machine_name", "date", "time", "arena", "identity", "region_id", "file_name"]
+
+
+def astype_or_explain(df, column, dtype=int):
+    """
+    Cast df[column] to dtype, raising a ValueError naming the flies whose value cannot be cast
+    """
+    try:
+        return df[column].astype(dtype)
+    except (TypeError, ValueError) as error:
+        bad=[]
+        for _, row in df.iterrows():
+            try:
+                np.array([row[column]]).astype(dtype)
+            except (TypeError, ValueError):
+                bad.append(row)
+
+        description_columns=[col for col in FLY_DESCRIPTION_COLUMNS if col in df.columns]
+        lines=[]
+        for row in bad:
+            fly=", ".join(f"{col}={row[col]!r}" for col in description_columns)
+            lines.append(f"  {fly}")
+
+        raise ValueError(
+            f"Metadata column {column} must be of type {dtype.__name__}, "
+            f"but {len(bad)} fly(s) have an invalid value:\n" + "\n".join(lines)
+        ) from error
+
+
 def read_metadata(path):
     met = pd.read_csv(path)
     if "identity" in met.columns:
@@ -597,9 +627,9 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
         # merge_df=merge_df.loc[merge_df["region_id"]!="NONE"]
 
         
-    merge_df['region_id'] = merge_df['region_id'].astype(int)
+    merge_df['region_id'] = astype_or_explain(merge_df, 'region_id', int)
     if "arena" in merge_df.columns:
-        arenas = merge_df["arena"].astype(int).tolist()
+        arenas = astype_or_explain(merge_df, "arena", int).tolist()
     else:
         arenas = [0] * merge_df.shape[0]
     id_prefixes = [get_flyhostel_id_prefix(file_name, arena) for file_name, arena in zip(merge_df['file_name'], arenas)]
