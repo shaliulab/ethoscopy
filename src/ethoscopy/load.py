@@ -21,11 +21,35 @@ from ethoscopy.misc.validate_datetime import validate_datetime
 from ethoscopy.misc.format_warning import format_warning
 from ethoscopy.ethoscope import read_single_roi as read_ethoscope_single_roi
 from ethoscopy.flyhostel import read_single_roi as read_flyhostel_single_roi
-from ethoscopy.flyhostel import read_qc_single_path, load_hour_start
+from ethoscopy.flyhostel import read_qc_single_path, load_hour_start, normalize_arena
 
 logger=logging.getLogger(__name__)
 pd.options.mode.chained_assignment = None
 warnings.formatwarning = format_warning
+
+
+ARENAS_FOLDER="arenas"
+ARENA_PREFIX="arena"
+ID_PREFIX_LENGTH=26
+
+
+def get_flyhostel_id_prefix(file_name, arena):
+    """
+    Return the experiment part of an animal id (experiment|identity), ID_PREFIX_LENGTH characters long
+    Mirrors flyhostel.utils.experiment.get_id_prefix
+
+    FlyHostel1_6X_2023-05-23_14-00-00.db -> FlyHostel1_6X_2023-05-23_14
+    FlyHostel1_4X_2026-10-13_17-00-00_arena2.db -> FH1_4X_261013_17-00_arena2
+    """
+    if arena == 0:
+        return file_name[:ID_PREFIX_LENGTH]
+
+    flyhostel, machine_name, date, time_ = file_name.split("_")[:4]
+    date_time=date.replace("-", "")[2:] + "_" + time_[:5]
+    prefix=f"FH{flyhostel.replace('FlyHostel', '')}_{machine_name}_{date_time}_{ARENA_PREFIX}{arena}"
+    if len(prefix)!=ID_PREFIX_LENGTH:
+        raise ValueError(f"id prefix {prefix} of {file_name} is not {ID_PREFIX_LENGTH} characters long")
+    return prefix
 
 
 def read_metadata(path):
@@ -113,6 +137,14 @@ def list_flyhostel_files(remote_dir):
                             os.chdir(exp)
                             files = os.listdir()
                             for path in files:
+                                if flyhostel_database_rule(path):
+                                    size = os.path.getsize(path)
+                                    final_path = f'{flyhostel}/{x_folder}/{exp}/{path}'
+                                    path_size_list = [final_path, size]
+                                    paths.append(path_size_list)
+                                    check_list.append([flyhostel, date_time[0]])
+                            # multi-arena recordings keep one dbfile per arena under arenas/N
+                            for path in glob.glob(f"{ARENAS_FOLDER}/*/*"):
                                 if flyhostel_database_rule(path):
                                     size = os.path.getsize(path)
                                     final_path = f'{flyhostel}/{x_folder}/{exp}/{path}'
@@ -478,9 +510,14 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
 
     for path in paths:  
         split_path = path[0].split('/')
-        split_series = pd.DataFrame(data = split_path).T 
+        # machine_id/machine_name/date_time/[arenas/N/]file_name
+        split_series = pd.DataFrame(data = split_path[:3] + split_path[-1:]).T 
         split_series.columns = ['machine_id', 'machine_name', 'date_time', 'file_name']
         split_series['file_size'] = path[1]
+        if len(split_path) == 6 and split_path[3] == ARENAS_FOLDER:
+            split_series['arena'] = normalize_arena(split_path[4])
+        else:
+            split_series['arena'] = 0
         database_df = pd.concat([database_df, split_series], ignore_index = True)
 
     #split the date_time column and add back to df
@@ -502,7 +539,24 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
                 warnings.warn(f'Ethoscopes {*drop_list,} have multiple files for their day, the largest file has been kept. If you want all files for that day please add a time column')
             merge_df = meta_df_original.merge(drop_df, how = 'outer', on = ['machine_name', 'date'])
         elif source == "flyhostel":
-            merge_df = meta_df_original.merge(drop_df, how = 'outer', on = ['machine_id', 'machine_name', 'date'])
+            # in multi-arena recordings, machine_name in the metadata is the number of animals in the arena
+            # while in the database it is the number of animals in the whole flyhostel (folder NX)
+            # so arena dbs are matched by arena instead
+            if "arena" in meta_df_original.columns:
+                meta_df_original["arena"] = [normalize_arena(arena) for arena in meta_df_original["arena"]]
+            else:
+                meta_df_original["arena"] = 0
+            meta_arena = meta_df_original["arena"] > 0
+            db_arena = database_df["arena"] > 0
+
+            drop_df = database_df.loc[~db_arena].sort_values(['file_size'], ascending = False)
+            drop_df = drop_df.drop_duplicates(['machine_id', 'machine_name', 'date'])
+            merge_df = meta_df_original.loc[~meta_arena].merge(drop_df, how = 'outer', on = ['machine_id', 'machine_name', 'date', 'arena'])
+
+            drop_df_arena = database_df.loc[db_arena].sort_values(['file_size'], ascending = False)
+            drop_df_arena = drop_df_arena.drop_duplicates(['machine_id', 'date', 'arena']).drop(columns=["machine_name"])
+            merge_df_arena = meta_df_original.loc[meta_arena].merge(drop_df_arena, how = 'outer', on = ['machine_id', 'date', 'arena'])
+            merge_df = pd.concat([merge_df, merge_df_arena], ignore_index = True)
 
         merge_df.dropna(inplace = True)
 
@@ -544,9 +598,14 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
 
         
     merge_df['region_id'] = merge_df['region_id'].astype(int)
-    merge_df.insert(0, 'id', merge_df['file_name'].str.slice(0,26,1) + '|' + merge_df['region_id'].map('{:02d}'.format))
+    if "arena" in merge_df.columns:
+        arenas = merge_df["arena"].astype(int).tolist()
+    else:
+        arenas = [0] * merge_df.shape[0]
+    id_prefixes = [get_flyhostel_id_prefix(file_name, arena) for file_name, arena in zip(merge_df['file_name'], arenas)]
+    merge_df.insert(0, 'id', [prefix + '|' + '{:02d}'.format(region_id) for prefix, region_id in zip(id_prefixes, merge_df['region_id'])])
     for i, id in enumerate(merge_df["id"]):
-        if "1X" in id:
+        if arenas[i] == 0 and "1X" in id:
             merge_df["id"].iloc[i] = id.split("|")[0] + "|00"
 
     return merge_df

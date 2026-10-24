@@ -189,6 +189,19 @@ def load_centroids(dbfile, identity, min_frame_number, max_frame_number, roi_0_t
 
 
 
+def normalize_arena(arena):
+    """
+    Return the arena as an int, 0 if the recording is not split into arenas (NONE, NaN, 0)
+    Mirrors flyhostel.utils.experiment.normalize_arena
+    """
+    try:
+        arena=int(float(arena))
+    except (TypeError, ValueError):
+        # NONE, NaN or empty values from metadata tables
+        return 0
+    return arena
+
+
 def read_single_roi(meta,
                     min_time = None,
                     max_time = None,
@@ -222,12 +235,18 @@ def read_single_roi(meta,
 
     assert "path" in meta.index, f"path column not present in passed metadata"
 
+    # all arenas of a multi-arena recording share machine_id and date
+    machine_id = meta['machine_id']
+    arena = normalize_arena(meta.get("arena"))
+    if arena > 0:
+        machine_id = f"{machine_id}_arena{arena}"
+
     if identity_table=="IDENTITY_VAL" and roi_0_table=="ROI_0_VAL":
-        cache_name = 'cached_{}_{}_{}_stride_{}_VAL.pkl'.format(meta['machine_id'], region_id, meta['date'], stride)
-        cache_name_meta = 'cached_{}_{}_{}_stride_{}_meta_VAL.pkl'.format(meta['machine_id'], region_id, meta['date'], stride)
+        cache_name = 'cached_{}_{}_{}_stride_{}_VAL.pkl'.format(machine_id, region_id, meta['date'], stride)
+        cache_name_meta = 'cached_{}_{}_{}_stride_{}_meta_VAL.pkl'.format(machine_id, region_id, meta['date'], stride)
     else:
-        cache_name = 'cached_{}_{}_{}_stride_{}_RAW.pkl'.format(meta['machine_id'], region_id, meta['date'], stride)
-        cache_name_meta = 'cached_{}_{}_{}_stride_{}_meta_RAW.pkl'.format(meta['machine_id'], region_id, meta['date'], stride)
+        cache_name = 'cached_{}_{}_{}_stride_{}_RAW.pkl'.format(machine_id, region_id, meta['date'], stride)
+        cache_name_meta = 'cached_{}_{}_{}_stride_{}_meta_RAW.pkl'.format(machine_id, region_id, meta['date'], stride)
     cache_path = Path(cache) / Path(cache_name)
     cache_path_meta = Path(cache) / Path(cache_name_meta)
     loaded_from_cache=False
