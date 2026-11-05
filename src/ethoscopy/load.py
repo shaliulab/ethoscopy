@@ -30,26 +30,23 @@ warnings.formatwarning = format_warning
 
 ARENAS_FOLDER="arenas"
 ARENA_PREFIX="arena"
-ID_PREFIX_LENGTH=26
 
 
 def get_flyhostel_id_prefix(file_name, arena):
     """
-    Return the experiment part of an animal id (experiment|identity), ID_PREFIX_LENGTH characters long
+    Return the experiment part of an animal id (experiment|identity). Its length depends on the experiment
     Mirrors flyhostel.utils.experiment.get_id_prefix
 
-    FlyHostel1_6X_2023-05-23_14-00-00.db -> FlyHostel1_6X_2023-05-23_14
+    FlyHostel1_6X_2023-05-23_14-00-00.db -> FlyHostel1_6X_2023-05-23_1
     FlyHostel1_4X_2026-10-13_17-00-00_arena2.db -> FH1_4X_261013_17-00_arena2
+    FlyHostel1_15X_2026-10-13_17-00-00_arena2.db -> FH1_15X_261013_17-00_arena2
     """
-    if arena == 0:
-        return file_name[:ID_PREFIX_LENGTH]
-
     flyhostel, machine_name, date, time_ = file_name.split("_")[:4]
+    if arena == 0:
+        return f"{flyhostel}_{machine_name}_{date}_{time_[0]}"
+
     date_time=date.replace("-", "")[2:] + "_" + time_[:5]
-    prefix=f"FH{flyhostel.replace('FlyHostel', '')}_{machine_name}_{date_time}_{ARENA_PREFIX}{arena}"
-    if len(prefix)!=ID_PREFIX_LENGTH:
-        raise ValueError(f"id prefix {prefix} of {file_name} is not {ID_PREFIX_LENGTH} characters long")
-    return prefix
+    return f"FH{flyhostel.replace('FlyHostel', '')}_{machine_name}_{date_time}_{ARENA_PREFIX}{arena}"
 
 
 # columns that identify a fly in the metadata, shown when one of its values is invalid
@@ -647,7 +644,7 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
         try:
             id_prefixes.append(get_flyhostel_id_prefix(file_name, arena))
         except ValueError as error:
-            # e.g. a multi-arena recording of 10 or more flies has no valid id: it must not stop the flies of every other experiment
+            # e.g. a malformed file name: it must not stop the flies of every other experiment
             logger.warning("Skipping a fly of %s: %s", file_name, error)
             id_prefixes.append(None)
     has_id = [prefix is not None for prefix in id_prefixes]
@@ -656,7 +653,7 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
     id_prefixes = [prefix for prefix in id_prefixes if prefix is not None]
     merge_df.insert(0, 'id', [prefix + '|' + '{:02d}'.format(region_id) for prefix, region_id in zip(id_prefixes, merge_df['region_id'])])
     for i, id in enumerate(merge_df["id"]):
-        if arenas[i] == 0 and "1X" in id:
+        if arenas[i] == 0 and id.split("_")[1] == "1X":
             merge_df["id"].iloc[i] = id.split("|")[0] + "|00"
 
     return merge_df
