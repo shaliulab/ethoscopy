@@ -642,7 +642,18 @@ def link_meta_index(metadata, remote_dir, local_dir, source="ethoscope", verbose
         arenas = astype_or_explain(merge_df, "arena", int).tolist()
     else:
         arenas = [0] * merge_df.shape[0]
-    id_prefixes = [get_flyhostel_id_prefix(file_name, arena) for file_name, arena in zip(merge_df['file_name'], arenas)]
+    id_prefixes = []
+    for file_name, arena in zip(merge_df['file_name'], arenas):
+        try:
+            id_prefixes.append(get_flyhostel_id_prefix(file_name, arena))
+        except ValueError as error:
+            # e.g. a multi-arena recording of 10 or more flies has no valid id: it must not stop the flies of every other experiment
+            logger.warning("Skipping a fly of %s: %s", file_name, error)
+            id_prefixes.append(None)
+    has_id = [prefix is not None for prefix in id_prefixes]
+    merge_df = merge_df.loc[has_id].reset_index(drop=True)
+    arenas = [arena for arena, keep in zip(arenas, has_id) if keep]
+    id_prefixes = [prefix for prefix in id_prefixes if prefix is not None]
     merge_df.insert(0, 'id', [prefix + '|' + '{:02d}'.format(region_id) for prefix, region_id in zip(id_prefixes, merge_df['region_id'])])
     for i, id in enumerate(merge_df["id"]):
         if arenas[i] == 0 and "1X" in id:
